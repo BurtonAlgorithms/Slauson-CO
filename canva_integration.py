@@ -251,9 +251,28 @@ class CanvaIntegration:
         if co_investors:
             draw.text((600, 790), f"Co-investors: {co_investors}", fill='darkgray', font=text_font)
         
-        # Convert to PDF bytes
-        pdf_bytes = io.BytesIO()
-        slide.save(pdf_bytes, format='PDF', resolution=100.0)
-        pdf_bytes.seek(0)
-        return pdf_bytes.read()
+        # Convert to PDF bytes using img2pdf for reliable PDF generation
+        try:
+            import img2pdf
+            # Save image to bytes buffer first
+            img_bytes = io.BytesIO()
+            slide.save(img_bytes, format='PNG')
+            img_bytes.seek(0)
+            # Convert PNG to PDF
+            pdf_bytes = img2pdf.convert(img_bytes.getvalue())
+            return pdf_bytes
+        except ImportError:
+            # Fallback: Use PIL's PDF (may not work perfectly)
+            print("Warning: img2pdf not available, using PIL PDF (may have issues)")
+            pdf_bytes = io.BytesIO()
+            slide.save(pdf_bytes, format='PDF', resolution=100.0)
+            pdf_bytes.seek(0)
+            return pdf_bytes.read()
+        except Exception as e:
+            print(f"Error converting to PDF: {e}")
+            # Last resort: return PNG as bytes
+            img_bytes = io.BytesIO()
+            slide.save(img_bytes, format='PNG')
+            img_bytes.seek(0)
+            return img_bytes.read()
 
