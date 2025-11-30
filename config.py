@@ -30,6 +30,9 @@ class Config:
     # LLM
     OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
     
+    # Google Gemini
+    GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+    
     # Granola (Future)
     GRANOLA_API_KEY = os.getenv("GRANOLA_API_KEY")
     
