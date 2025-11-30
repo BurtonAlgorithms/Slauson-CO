@@ -256,23 +256,69 @@ class CanvaIntegration:
             import img2pdf
             # Save image to bytes buffer first
             img_bytes = io.BytesIO()
-            slide.save(img_bytes, format='PNG')
+            slide.save(img_bytes, format='PNG', quality=95)
             img_bytes.seek(0)
-            # Convert PNG to PDF
-            pdf_bytes = img2pdf.convert(img_bytes.getvalue())
+            img_data = img_bytes.getvalue()
+            
+            # Convert PNG to PDF with proper page size (1920x1080 points = 20x11.25 inches at 96 DPI)
+            # A4 size in points: 595.276 x 841.890
+            # We'll use the image dimensions directly
+            pdf_bytes = img2pdf.convert(
+                img_data,
+                pagesize=(img2pdf.in_to_pt(20), img2pdf.in_to_pt(11.25))  # 1920x1080 at 96 DPI
+            )
+            print(f"Successfully converted slide to PDF using img2pdf, size: {len(pdf_bytes)} bytes")
             return pdf_bytes
         except ImportError:
-            # Fallback: Use PIL's PDF (may not work perfectly)
-            print("Warning: img2pdf not available, using PIL PDF (may have issues)")
-            pdf_bytes = io.BytesIO()
-            slide.save(pdf_bytes, format='PDF', resolution=100.0)
-            pdf_bytes.seek(0)
-            return pdf_bytes.read()
+            # Fallback: Use reportlab or fpdf if available
+            print("Warning: img2pdf not available, trying alternative methods...")
+            try:
+                from reportlab.pdfgen import canvas
+                from reportlab.lib.pagesizes import letter
+                from reportlab.lib.utils import ImageReader
+                
+                pdf_bytes = io.BytesIO()
+                c = canvas.Canvas(pdf_bytes, pagesize=(1920, 1080))
+                # Draw image on canvas
+                img_bytes = io.BytesIO()
+                slide.save(img_bytes, format='PNG')
+                img_bytes.seek(0)
+                c.drawImage(ImageReader(img_bytes), 0, 0, width=1920, height=1080)
+                c.save()
+                pdf_bytes.seek(0)
+                print("Successfully converted slide to PDF using reportlab")
+                return pdf_bytes.read()
+            except ImportError:
+                print("Warning: reportlab not available, using PIL PDF (may have issues)")
+                pdf_bytes = io.BytesIO()
+                slide.save(pdf_bytes, format='PDF', resolution=100.0)
+                pdf_bytes.seek(0)
+                return pdf_bytes.read()
         except Exception as e:
-            print(f"Error converting to PDF: {e}")
-            # Last resort: return PNG as bytes
-            img_bytes = io.BytesIO()
-            slide.save(img_bytes, format='PNG')
-            img_bytes.seek(0)
-            return img_bytes.read()
+            print(f"Error converting to PDF with img2pdf: {e}")
+            import traceback
+            print(traceback.format_exc())
+            # Try reportlab as fallback
+            try:
+                from reportlab.pdfgen import canvas
+                from reportlab.lib.utils import ImageReader
+                
+                pdf_bytes = io.BytesIO()
+                c = canvas.Canvas(pdf_bytes, pagesize=(1920, 1080))
+                img_bytes = io.BytesIO()
+                slide.save(img_bytes, format='PNG')
+                img_bytes.seek(0)
+                c.drawImage(ImageReader(img_bytes), 0, 0, width=1920, height=1080)
+                c.save()
+                pdf_bytes.seek(0)
+                print("Successfully converted slide to PDF using reportlab (fallback)")
+                return pdf_bytes.read()
+            except Exception as e2:
+                print(f"Error with reportlab fallback: {e2}")
+                # Last resort: return PNG as bytes (not ideal but better than broken PDF)
+                img_bytes = io.BytesIO()
+                slide.save(img_bytes, format='PNG')
+                img_bytes.seek(0)
+                print("Warning: Returning PNG instead of PDF due to conversion errors")
+                return img_bytes.read()
 
