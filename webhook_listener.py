@@ -213,11 +213,15 @@ def handle_onboarding():
                 logo_path
             )
             
-            # Add PDF URL if available for DocSend upload
+            # Add PDF as base64 in response for download
             if results.get("canva_slide_path") and os.path.exists(results["canva_slide_path"]):
-                # In production, you'd upload this and return a URL
-                # For now, return the path (Zapier can handle file uploads)
-                results["pdf_path"] = results["canva_slide_path"]
+                # Read PDF and encode as base64 for download
+                with open(results["canva_slide_path"], 'rb') as f:
+                    pdf_bytes = f.read()
+                    pdf_base64 = base64.b64encode(pdf_bytes).decode('utf-8')
+                    results["pdf_base64"] = pdf_base64
+                    results["pdf_filename"] = f"{company_data.get('name', 'slide').replace(' ', '_')}_slide.pdf"
+                    results["pdf_path"] = results["canva_slide_path"]
             
             # Include Notion metadata in response for reference
             if notion_metadata.get("page_id"):
