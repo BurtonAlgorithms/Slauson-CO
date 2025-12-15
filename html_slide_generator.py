@@ -96,26 +96,47 @@ class HTMLSlideGenerator:
         Tries common system fonts, then DejaVu (available in most containers), then default.
         """
         font_candidates = []
-        # Preferred bundled fonts on Linux containers
+        # Preferred bundled fonts on Linux containers (Render uses these)
         if bold:
             font_candidates.append("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf")
+            font_candidates.append("/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf")
         font_candidates.append("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf")
-        # macOS fonts (may exist locally, ignored on Render)
+        font_candidates.append("/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf")
+        # Try to find fonts via fontconfig (common on Linux)
+        try:
+            import subprocess
+            result = subprocess.run(['fc-list'], capture_output=True, text=True, timeout=1)
+            if result.returncode == 0:
+                # Look for DejaVu or Liberation in font list
+                for line in result.stdout.split('\n'):
+                    if 'DejaVu' in line or 'Liberation' in line:
+                        font_path = line.split(':')[0] if ':' in line else None
+                        if font_path and os.path.exists(font_path):
+                            if bold and 'Bold' in font_path:
+                                font_candidates.insert(0, font_path)
+                            elif not bold and 'Bold' not in font_path:
+                                font_candidates.insert(0, font_path)
+        except Exception:
+            pass  # Fontconfig not available, continue with hardcoded paths
+        
+        # macOS fonts (for local development only)
         if bold:
             font_candidates.append("/System/Library/Fonts/Helvetica-Bold.ttf")
             font_candidates.append("/System/Library/Fonts/Arial Bold.ttf")
         font_candidates.append("/System/Library/Fonts/Helvetica.ttc")
         font_candidates.append("/System/Library/Fonts/Arial.ttf")
-        # Generic names (if fontconfig resolves them)
-        font_candidates.append("Arial Bold.ttf" if bold else "Arial.ttf")
-        font_candidates.append("Helvetica-Bold.ttf" if bold else "Helvetica.ttf")
 
         for path in font_candidates:
             try:
-                return ImageFont.truetype(path, size)
-            except Exception:
+                if os.path.exists(path) or not os.path.isabs(path):
+                    # Only check existence for absolute paths
+                    return ImageFont.truetype(path, size)
+            except (OSError, IOError, Exception) as e:
+                # Silently continue to next candidate
                 continue
-        # Final fallback
+        
+        # Final fallback - always works
+        print(f"Warning: Could not load custom font, using default font for size {size}")
         return ImageFont.load_default()
     
     def _pdf_to_image(self, pdf_path: str) -> Image.Image:
@@ -423,10 +444,6 @@ class HTMLSlideGenerator:
             point_length = 12  # Length of the pointed bottom
             hole_radius = 6  # Radius of the circular hole
             
-            # Erase old pin area
-            pin_bg = self._get_dominant_color(template, (pin_x - 50, pin_y - 50, 100, 100))
-            draw.ellipse([(pin_x - 40, pin_y - 40), (pin_x + 40, pin_y + 40)], fill=pin_bg)
-            
             # Create a temporary image for the pin to draw the teardrop shape
             pin_img_size = max(pin_width, pin_height + point_length) + 20
             pin_img = Image.new('RGBA', (pin_img_size, pin_img_size), (0, 0, 0, 0))
@@ -524,14 +541,11 @@ class HTMLSlideGenerator:
             if box_y + box_height > map_area_y + map_height:
                 box_y = pin_y - box_height - 20  # Move up if it would go outside
             
-            # Erase old location area
+            # Erase old location area (keep transparent; no colored background)
             location_bg = self._get_dominant_color(template, (box_x - 10, box_y - 10, box_width + 20, box_height + 20))
             draw.rectangle([(box_x - 10, box_y - 10), (box_x + box_width + 10, box_y + box_height + 10)], fill=location_bg)
             
-            # Draw yellow box (similar style to other section labels)
-            draw.rectangle([(box_x, box_y), (box_x + box_width, box_y + box_height)], fill=yellow)
-            
-            # Draw location text in the yellow box (centered)
+            # Draw location text (no background box, transparent behind text)
             text_x = box_x + box_padding_x
             text_y = box_y + box_padding_y
             draw.text((text_x, text_y), location, fill=black, font=location_font)
