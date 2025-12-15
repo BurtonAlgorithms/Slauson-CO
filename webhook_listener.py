@@ -376,22 +376,35 @@ def handle_onboarding():
                         print(f"⚠️  HTML → PDF failed: {html_error}")
                         print("   Trying Canva...")
                         
-                        # Fallback to Canva
-                        try:
-                            print("🎨 Using Canva template...")
-                            canva = CanvaIntegration()
-                            slide_pdf_bytes = canva.create_slide_alternative(
-                                company_data,
-                                temp_headshot_path,
-                                logo_path,
-                                map_path=map_path
-                            )
-                            print("✓ Slide created with Canva")
-                        except Exception as canva_error:
-                            print(f"⚠️  Canva failed: {canva_error}")
+                        # Fallback to Canva (only if credentials are available)
+                        canva_error = None
+                        from config import Config
+                        has_canva_creds = (
+                            (Config.CANVA_API_KEY or (Config.CANVA_CLIENT_ID and Config.CANVA_CLIENT_SECRET)) 
+                            and Config.CANVA_TEMPLATE_ID
+                        )
+                        
+                        if has_canva_creds:
+                            try:
+                                print("🎨 Using Canva template...")
+                                canva = CanvaIntegration()
+                                slide_pdf_bytes = canva.create_slide_alternative(
+                                    company_data,
+                                    temp_headshot_path,
+                                    logo_path,
+                                    map_path=map_path
+                                )
+                                print("✓ Slide created with Canva")
+                            except Exception as e:
+                                canva_error = e
+                                print(f"⚠️  Canva failed: {canva_error}")
+                                print("   Falling back to Gemini method...")
+                        else:
+                            print("   Canva credentials not configured, skipping Canva...")
                             print("   Falling back to Gemini method...")
-                            
-                            # Fallback to Gemini method (uses template image as base)
+                        
+                        # Fallback to Gemini method (uses template image as base)
+                        if not slide_pdf_bytes:
                             try:
                                 from gemini_slide_generator import GeminiSlideGenerator
                                 gemini_gen = GeminiSlideGenerator()
@@ -409,11 +422,11 @@ def handle_onboarding():
                                 print("✓ Slide created with Gemini method (using template image)")
                             except Exception as gemini_error:
                                 print(f"❌ All methods failed!")
-                                raise Exception(
-                                    f"HTML → PDF error: {html_error}. "
-                                    f"Canva error: {canva_error}. "
-                                    f"Gemini error: {gemini_error}"
-                                )
+                                error_msg = f"HTML → PDF error: {html_error}"
+                                if canva_error:
+                                    error_msg += f". Canva error: {canva_error}"
+                                error_msg += f". Gemini error: {gemini_error}"
+                                raise Exception(error_msg)
                     
                 except Exception as e:
                     print(f"Error creating slide: {e}")
