@@ -376,7 +376,7 @@ def handle_onboarding():
                         print(f"⚠️  HTML → PDF failed: {html_error}")
                         print("   Trying Canva...")
                         
-                        # Fallback to Canva (only if credentials are available)
+                        # Try Canva only if credentials are available
                         canva_error = None
                         from config import Config
                         has_canva_creds = (
@@ -398,35 +398,15 @@ def handle_onboarding():
                             except Exception as e:
                                 canva_error = e
                                 print(f"⚠️  Canva failed: {canva_error}")
-                                print("   Falling back to Gemini method...")
-                        else:
-                            print("   Canva credentials not configured, skipping Canva...")
-                            print("   Falling back to Gemini method...")
                         
-                        # Fallback to Gemini method (uses template image as base)
                         if not slide_pdf_bytes:
-                            try:
-                                from gemini_slide_generator import GeminiSlideGenerator
-                                gemini_gen = GeminiSlideGenerator()
-                                if not gemini_gen.template_path or not os.path.exists(gemini_gen.template_path):
-                                    raise ValueError(
-                                        f"Template image not found. Please set SLIDE_TEMPLATE_PATH in .env to point to your template image.\n"
-                                        f"Expected: {gemini_gen.template_path}"
-                                    )
-                                slide_pdf_bytes = gemini_gen.create_slide_exact_design(
-                                    company_data,
-                                    temp_headshot_path,
-                                    logo_path,
-                                    map_path=map_path
-                                )
-                                print("✓ Slide created with Gemini method (using template image)")
-                            except Exception as gemini_error:
-                                print(f"❌ All methods failed!")
-                                error_msg = f"HTML → PDF error: {html_error}"
-                                if canva_error:
-                                    error_msg += f". Canva error: {canva_error}"
-                                error_msg += f". Gemini error: {gemini_error}"
-                                raise Exception(error_msg)
+                            error_msg = f"HTML → PDF error: {html_error}"
+                            if canva_error:
+                                error_msg += f". Canva error: {canva_error}"
+                            else:
+                                if not has_canva_creds:
+                                    error_msg += ". Canva skipped (credentials not configured)"
+                            raise Exception(error_msg)
                     
                 except Exception as e:
                     print(f"Error creating slide: {e}")
