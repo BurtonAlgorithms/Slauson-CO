@@ -24,19 +24,47 @@ except TypeError:
 class HTMLSlideGenerator:
     def __init__(self):
         from config import Config
-        self.template_path = Config.SLIDE_TEMPLATE_PATH if hasattr(Config, 'SLIDE_TEMPLATE_PATH') else None
+        
+        # Get the directory where this script is located (works on Render too)
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        project_root = os.path.dirname(script_dir) if os.path.basename(script_dir) != 'slauson-automation' else script_dir
+        
+        # Slide template path - check config first, then try default locations
+        self.template_path = getattr(Config, 'SLIDE_TEMPLATE_PATH', None) if hasattr(Config, 'SLIDE_TEMPLATE_PATH') else None
+        if not self.template_path or not os.path.exists(self.template_path):
+            # Try default locations (relative to script, then project root, then current working directory)
+            default_template_paths = [
+                os.path.join(script_dir, 'templates', 'SLAUSON&CO.Template.pdf'),
+                os.path.join(project_root, 'templates', 'SLAUSON&CO.Template.pdf'),
+                'templates/SLAUSON&CO.Template.pdf',
+                os.path.join(script_dir, 'templates', 'template.pdf'),
+                os.path.join(project_root, 'templates', 'template.pdf'),
+                'templates/template.pdf',
+                'templates/template.png',
+                'templates/template.jpg',
+            ]
+            for path in default_template_paths:
+                if path and os.path.exists(path):
+                    self.template_path = path
+                    print(f"✓ Found template at: {self.template_path}")
+                    break
+        
         # Map template path - check config first, then try default locations
         self.map_template_path = getattr(Config, 'MAP_TEMPLATE_PATH', None) if hasattr(Config, 'MAP_TEMPLATE_PATH') else None
-        if not self.map_template_path:
-            # Try default locations (relative to project root, then absolute)
-            default_paths = [
+        if not self.map_template_path or not os.path.exists(self.map_template_path):
+            # Try default locations (relative to script, then project root, then current working directory)
+            default_map_paths = [
+                os.path.join(script_dir, 'templates', 'map_template.pdf'),
+                os.path.join(project_root, 'templates', 'map_template.pdf'),
                 'templates/map_template.pdf',
+                os.path.join(script_dir, 'templates', 'SLAUSON&CO. (1).pdf'),
+                os.path.join(project_root, 'templates', 'SLAUSON&CO. (1).pdf'),
                 'templates/SLAUSON&CO. (1).pdf',
-                '/Users/henoktewolde/Downloads/SLAUSON&CO. (1).pdf'
             ]
-            for path in default_paths:
-                if os.path.exists(path):
+            for path in default_map_paths:
+                if path and os.path.exists(path):
                     self.map_template_path = path
+                    print(f"✓ Found map template at: {self.map_template_path}")
                     break
     
     def _pdf_to_image(self, pdf_path: str) -> Image.Image:
@@ -158,12 +186,37 @@ class HTMLSlideGenerator:
         return (0.50, 0.50)
 
     def create_slide(self, company_data: Dict, headshot_path: str, logo_path: str, map_path: Optional[str] = None) -> bytes:
-        # Check if template exists
+        # Check if template exists, try default locations if not found
         if not self.template_path or not os.path.exists(self.template_path):
-            raise ValueError(
-                f"Template not found at: {self.template_path}\n"
-                f"Please set SLIDE_TEMPLATE_PATH in .env to point to your template PDF or image file."
-            )
+            # Get the directory where this script is located
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            project_root = os.path.dirname(script_dir) if os.path.basename(script_dir) != 'slauson-automation' else script_dir
+            
+            # Try to find template in common locations
+            possible_paths = [
+                os.path.join(script_dir, 'templates', 'SLAUSON&CO.Template.pdf'),
+                os.path.join(project_root, 'templates', 'SLAUSON&CO.Template.pdf'),
+                'templates/SLAUSON&CO.Template.pdf',
+                os.path.join(script_dir, 'templates', 'template.pdf'),
+                os.path.join(project_root, 'templates', 'template.pdf'),
+                'templates/template.pdf',
+                'templates/template.png',
+                'templates/template.jpg',
+            ]
+            found_path = None
+            for path in possible_paths:
+                if path and os.path.exists(path):
+                    found_path = path
+                    print(f"✓ Found template at: {found_path}")
+                    break
+            
+            if not found_path:
+                raise ValueError(
+                    f"Template not found. Tried: {self.template_path}\n"
+                    f"Please set SLIDE_TEMPLATE_PATH in .env or place template at: templates/SLAUSON&CO.Template.pdf\n"
+                    f"Script dir: {script_dir}, Project root: {project_root}"
+                )
+            self.template_path = found_path
         
         # Load template (PDF or image)
         template_ext = os.path.splitext(self.template_path)[1].lower()
@@ -331,64 +384,83 @@ class HTMLSlideGenerator:
             # Draw the pin (yellow location pin icon - teardrop shape with circular hole)
             yellow = (255, 215, 0)
             black = (0, 0, 0)
-            dark_yellow = (200, 170, 0)  # For shadow/depth
             
-            # Pin dimensions
-            pin_width = 32  # Width of the teardrop
-            pin_height = 44  # Height of the teardrop (including point)
-            pin_point_length = 10  # Length of the point at the bottom
-            hole_radius = 5  # Radius of the circular hole
+            # Pin dimensions - larger for visibility
+            pin_width = 40  # Width of the rounded top
+            pin_height = 50  # Total height including point
+            point_length = 12  # Length of the pointed bottom
+            hole_radius = 6  # Radius of the circular hole
             
             # Erase old pin area
-            pin_bg = self._get_dominant_color(template, (pin_x - 40, pin_y - 40, 80, 80))
-            draw.ellipse([(pin_x - 30, pin_y - 30), (pin_x + 30, pin_y + 30)], fill=pin_bg)
+            pin_bg = self._get_dominant_color(template, (pin_x - 50, pin_y - 50, 100, 100))
+            draw.ellipse([(pin_x - 40, pin_y - 40), (pin_x + 40, pin_y + 40)], fill=pin_bg)
             
             # Create a temporary image for the pin to draw the teardrop shape
-            pin_img = Image.new('RGBA', (pin_width + 20, pin_height + pin_point_length + 20), (0, 0, 0, 0))
+            pin_img_size = max(pin_width, pin_height + point_length) + 20
+            pin_img = Image.new('RGBA', (pin_img_size, pin_img_size), (0, 0, 0, 0))
             pin_draw = ImageDraw.Draw(pin_img)
             
             # Calculate center position in the pin image
-            center_x = (pin_width + 20) // 2
-            center_y = (pin_height + pin_point_length + 20) // 2
+            center_x = pin_img_size // 2
+            center_y = pin_img_size // 2
             
             # Draw shadow first (slightly offset and darker) for depth
-            shadow_offset = 2
+            shadow_offset = 3
+            shadow_center_x = center_x + shadow_offset
+            shadow_center_y = center_y + shadow_offset
+            
+            # Shadow: rounded top (ellipse) + pointed bottom (triangle)
+            # Top ellipse for shadow
+            shadow_top_y = shadow_center_y - pin_height // 2
+            pin_draw.ellipse(
+                [(shadow_center_x - pin_width // 2, shadow_top_y - pin_width // 4),
+                 (shadow_center_x + pin_width // 2, shadow_top_y + pin_width // 4)],
+                fill=(50, 50, 50, 120)
+            )
+            # Bottom triangle for shadow
             shadow_points = [
-                (center_x + shadow_offset, center_y - pin_height // 2 + shadow_offset),  # Top center
-                (center_x + shadow_offset - pin_width // 3, center_y - pin_height // 2 + shadow_offset - pin_height // 3),  # Left curve
-                (center_x + shadow_offset + pin_width // 3, center_y - pin_height // 2 + shadow_offset - pin_height // 3),  # Right curve
-                (center_x + shadow_offset, center_y + pin_point_length + shadow_offset),  # Point
+                (shadow_center_x - pin_width // 2, shadow_top_y + pin_width // 4),
+                (shadow_center_x + pin_width // 2, shadow_top_y + pin_width // 4),
+                (shadow_center_x, shadow_center_y + point_length + shadow_offset),
             ]
-            pin_draw.polygon(shadow_points, fill=(50, 50, 50, 150))  # Semi-transparent dark shadow
+            pin_draw.polygon(shadow_points, fill=(50, 50, 50, 120))
             
             # Draw main teardrop shape (yellow)
+            # Top: rounded ellipse (the rounded part of the teardrop)
+            top_y = center_y - pin_height // 2
+            pin_draw.ellipse(
+                [(center_x - pin_width // 2, top_y - pin_width // 4),
+                 (center_x + pin_width // 2, top_y + pin_width // 4)],
+                fill=yellow, outline=black, width=2
+            )
+            
+            # Bottom: triangle connecting to point (the pointed part)
             teardrop_points = [
-                (center_x, center_y - pin_height // 2),  # Top center
-                (center_x - pin_width // 3, center_y - pin_height // 2 - pin_height // 3),  # Left curve
-                (center_x + pin_width // 3, center_y - pin_height // 2 - pin_height // 3),  # Right curve
-                (center_x, center_y + pin_point_length),  # Point
+                (center_x - pin_width // 2, top_y + pin_width // 4),  # Left bottom of ellipse
+                (center_x + pin_width // 2, top_y + pin_width // 4),  # Right bottom of ellipse
+                (center_x, center_y + point_length),  # Point at bottom
             ]
             pin_draw.polygon(teardrop_points, fill=yellow, outline=black, width=2)
             
             # Draw circular hole in the center (dark circle for depth)
             hole_center_x = center_x
-            hole_center_y = center_y - pin_height // 2 - pin_height // 6  # Position hole in upper part
+            hole_center_y = top_y  # Position hole at top center
             pin_draw.ellipse(
                 [(hole_center_x - hole_radius, hole_center_y - hole_radius),
                  (hole_center_x + hole_radius, hole_center_y + hole_radius)],
                 fill=black
             )
             
-            # Add inner highlight ring for 3D effect
+            # Add inner highlight ring for 3D effect (lighter inner ring)
             pin_draw.ellipse(
-                [(hole_center_x - hole_radius + 1, hole_center_y - hole_radius + 1),
-                 (hole_center_x + hole_radius - 1, hole_center_y + hole_radius - 1)],
-                fill=(80, 80, 80)
+                [(hole_center_x - hole_radius + 2, hole_center_y - hole_radius + 2),
+                 (hole_center_x + hole_radius - 2, hole_center_y + hole_radius - 2)],
+                fill=(100, 100, 100)
             )
             
             # Paste the pin onto the main slide (centered at pin_x, pin_y)
-            paste_pin_x = pin_x - (pin_width + 20) // 2
-            paste_pin_y = pin_y - (pin_height + pin_point_length + 20) // 2
+            paste_pin_x = pin_x - pin_img_size // 2
+            paste_pin_y = pin_y - pin_img_size // 2
             slide.paste(pin_img, (paste_pin_x, paste_pin_y), pin_img)
             draw = ImageDraw.Draw(slide)
             
