@@ -29,7 +29,13 @@ class HTMLSlideGenerator:
         script_dir = os.path.dirname(os.path.abspath(__file__))
         # On Render: script_dir = /opt/render/project/src, project_root = /opt/render/project
         # Locally: script_dir = /path/to/slauson-automation, project_root = /path/to/slauson-automation
-        project_root = os.path.dirname(script_dir) if os.path.basename(script_dir) in ['src', 'slauson-automation'] else script_dir
+        # Check if we're in a 'src' subdirectory (Render) or directly in project root
+        if os.path.basename(script_dir) == 'src':
+            project_root = os.path.dirname(script_dir)
+        else:
+            project_root = script_dir
+        
+        print(f"DEBUG: script_dir={script_dir}, project_root={project_root}")
         
         # Slide template path - check config first, then try default locations
         self.template_path = getattr(Config, 'SLIDE_TEMPLATE_PATH', None) if hasattr(Config, 'SLIDE_TEMPLATE_PATH') else None
@@ -57,11 +63,14 @@ class HTMLSlideGenerator:
                 'templates/template.png',
                 'templates/template.jpg',
             ]
+            print(f"DEBUG: Checking {len(default_template_paths)} template paths...")
             for path in default_template_paths:
                 if path and os.path.exists(path):
                     self.template_path = path
                     print(f"✓ Found template at: {self.template_path}")
                     break
+                else:
+                    print(f"  - Not found: {path}")
         
         # Map template path - check config first, then try default locations
         self.map_template_path = getattr(Config, 'MAP_TEMPLATE_PATH', None) if hasattr(Config, 'MAP_TEMPLATE_PATH') else None
