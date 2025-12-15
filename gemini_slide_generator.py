@@ -117,6 +117,20 @@ class GeminiSlideGenerator:
         color_counts = Counter([p[:3] for p in pixels])
         return color_counts.most_common(1)[0][0]
     
+    def _pdf_to_image(self, pdf_path: str) -> Image.Image:
+        """Convert first page of PDF to PIL Image."""
+        try:
+            from pdf2image import convert_from_path
+            images = convert_from_path(pdf_path, dpi=300, first_page=1, last_page=1)
+            if images:
+                return images[0].convert('RGBA')
+        except ImportError:
+            raise ImportError(
+                "pdf2image required for PDF templates. Install with: pip install pdf2image"
+            )
+        except Exception as e:
+            raise Exception(f"Failed to convert PDF to image: {e}")
+    
     def _get_text_color_from_template(self, template: Image.Image, x: int, y: int, width: int, height: int) -> Tuple[int, int, int]:
         """Extract text color from template by finding brightest/darkest pixels in region."""
         region = template.crop((x, y, x + width, y + height))
@@ -159,8 +173,14 @@ class GeminiSlideGenerator:
                 f"Please set SLIDE_TEMPLATE_PATH in .env to point to your template image file."
             )
         
-        # Load template image
-        template = Image.open(self.template_path).convert('RGBA')
+        # Load template (PDF or image)
+        template_ext = os.path.splitext(self.template_path)[1].lower()
+        if template_ext == '.pdf':
+            # Convert PDF to image
+            template = self._pdf_to_image(self.template_path)
+        else:
+            # Load as image
+            template = Image.open(self.template_path).convert('RGBA')
         # Resize to standard slide size if needed
         if template.size != (1920, 1080):
             template = template.resize((1920, 1080), Image.Resampling.LANCZOS)
