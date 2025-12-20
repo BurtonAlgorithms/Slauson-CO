@@ -210,6 +210,7 @@ class HTMLSlideGenerator:
         """
         Manually remove white/light backgrounds from an image using thresholding.
         This is a fallback when Remove.bg API fails or isn't available.
+        Uses multiple techniques for better background removal.
         """
         try:
             import numpy as np
@@ -225,18 +226,40 @@ class HTMLSlideGenerator:
                 rgb = img_array
                 alpha = np.ones((img_array.shape[0], img_array.shape[1]), dtype=np.uint8) * 255
             
-            # Calculate brightness (average of RGB channels)
+            # Method 1: Brightness threshold (remove light backgrounds)
             brightness = np.mean(rgb, axis=2)
+            brightness_mask = (brightness < 200).astype(np.uint8) * 255  # Remove pixels brighter than 200
             
-            # Threshold: pixels brighter than this are considered background
-            # Adjust threshold (0-255) - higher = more aggressive removal
-            threshold = 240  # Remove very light backgrounds
+            # Method 2: Color similarity (remove white/light grey backgrounds)
+            # White/light backgrounds have high values in all RGB channels
+            white_threshold = 200
+            is_white = (rgb[:, :, 0] > white_threshold) & (rgb[:, :, 1] > white_threshold) & (rgb[:, :, 2] > white_threshold)
+            white_mask = (~is_white).astype(np.uint8) * 255
             
-            # Create mask: 1 for foreground (keep), 0 for background (remove)
-            mask = (brightness < threshold).astype(np.uint8) * 255
+            # Method 3: Edge detection - keep edges (likely foreground)
+            try:
+                from scipy import ndimage
+                # Convert to grayscale for edge detection
+                gray = np.mean(rgb, axis=2)
+                # Apply Sobel edge detection
+                sobel_x = ndimage.sobel(gray, axis=1)
+                sobel_y = ndimage.sobel(gray, axis=0)
+                edges = np.sqrt(sobel_x**2 + sobel_y**2)
+                # Keep areas with edges (likely foreground)
+                edge_mask = (edges > 10).astype(np.uint8) * 255
+            except ImportError:
+                # scipy not available, skip edge detection
+                edge_mask = np.ones_like(brightness_mask) * 255
+            except Exception:
+                edge_mask = np.ones_like(brightness_mask) * 255  # If edge detection fails, don't use it
+            
+            # Combine masks: keep pixels that pass brightness AND white check, OR have edges
+            combined_mask = np.minimum(brightness_mask, white_mask)
+            # Also keep edge areas even if they're bright (might be foreground details)
+            combined_mask = np.maximum(combined_mask, edge_mask)
             
             # Apply mask to alpha channel
-            new_alpha = np.minimum(alpha, mask)
+            new_alpha = np.minimum(alpha, combined_mask)
             
             # Combine RGB with new alpha
             if img_array.shape[2] == 4:
@@ -248,6 +271,34 @@ class HTMLSlideGenerator:
             result_img = Image.fromarray(result_array, 'RGBA')
             return result_img
             
+        except ImportError:
+            # If scipy not available, use simpler method
+            try:
+                import numpy as np
+                img_array = np.array(img)
+                if img_array.shape[2] == 4:
+                    rgb = img_array[:, :, :3]
+                    alpha = img_array[:, :, 3]
+                else:
+                    rgb = img_array
+                    alpha = np.ones((img_array.shape[0], img_array.shape[1]), dtype=np.uint8) * 255
+                
+                brightness = np.mean(rgb, axis=2)
+                white_threshold = 200
+                is_white = (rgb[:, :, 0] > white_threshold) & (rgb[:, :, 1] > white_threshold) & (rgb[:, :, 2] > white_threshold)
+                mask = (~is_white).astype(np.uint8) * 255
+                new_alpha = np.minimum(alpha, mask)
+                
+                if img_array.shape[2] == 4:
+                    result_array = np.dstack((rgb, new_alpha))
+                else:
+                    result_array = np.dstack((rgb, new_alpha))
+                
+                result_img = Image.fromarray(result_array, 'RGBA')
+                return result_img
+            except Exception as e:
+                print(f"   Warning: Manual background removal failed: {e}")
+                return img.convert('RGBA')
         except Exception as e:
             print(f"   Warning: Manual background removal failed: {e}")
             # Return original image if manual removal fails
@@ -265,7 +316,7 @@ class HTMLSlideGenerator:
         city_positions = {
             # West Coast
             'san francisco': (0.05, 0.42),  # Updated: West Coast, California
-            'los angeles': (0.11, 0.64),   # Updated: West Coast, California - adjusted for accurate positioning
+            'los angeles': (0.10, 0.60),   # Updated: West Coast, California - moved up and left
             'san diego': (0.10, 0.70),
             'seattle': (0.08, 0.20),
             'portland': (0.09, 0.25),
