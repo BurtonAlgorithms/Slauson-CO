@@ -206,6 +206,53 @@ class HTMLSlideGenerator:
         
         return (255, 140, 0) if y < 200 else (255, 255, 255)
     
+    def _remove_background_manual(self, img: Image.Image) -> Image.Image:
+        """
+        Manually remove white/light backgrounds from an image using thresholding.
+        This is a fallback when Remove.bg API fails or isn't available.
+        """
+        try:
+            import numpy as np
+            
+            # Convert to numpy array
+            img_array = np.array(img)
+            
+            # If image is RGBA, work with RGB channels
+            if img_array.shape[2] == 4:
+                rgb = img_array[:, :, :3]
+                alpha = img_array[:, :, 3]
+            else:
+                rgb = img_array
+                alpha = np.ones((img_array.shape[0], img_array.shape[1]), dtype=np.uint8) * 255
+            
+            # Calculate brightness (average of RGB channels)
+            brightness = np.mean(rgb, axis=2)
+            
+            # Threshold: pixels brighter than this are considered background
+            # Adjust threshold (0-255) - higher = more aggressive removal
+            threshold = 240  # Remove very light backgrounds
+            
+            # Create mask: 1 for foreground (keep), 0 for background (remove)
+            mask = (brightness < threshold).astype(np.uint8) * 255
+            
+            # Apply mask to alpha channel
+            new_alpha = np.minimum(alpha, mask)
+            
+            # Combine RGB with new alpha
+            if img_array.shape[2] == 4:
+                result_array = np.dstack((rgb, new_alpha))
+            else:
+                result_array = np.dstack((rgb, new_alpha))
+            
+            # Convert back to PIL Image
+            result_img = Image.fromarray(result_array, 'RGBA')
+            return result_img
+            
+        except Exception as e:
+            print(f"   Warning: Manual background removal failed: {e}")
+            # Return original image if manual removal fails
+            return img.convert('RGBA')
+    
     def _get_city_coordinates(self, city_name: str) -> tuple:
         """
         Get normalized coordinates (0-1) for US cities on a map.
@@ -218,7 +265,7 @@ class HTMLSlideGenerator:
         city_positions = {
             # West Coast
             'san francisco': (0.05, 0.42),  # Updated: West Coast, California
-            'los angeles': (0.09, 0.62),   # Updated: West Coast, California
+            'los angeles': (0.11, 0.64),   # Updated: West Coast, California - adjusted for accurate positioning
             'san diego': (0.10, 0.70),
             'seattle': (0.08, 0.20),
             'portland': (0.09, 0.25),
@@ -647,12 +694,30 @@ class HTMLSlideGenerator:
             
             # Remove background from headshot to make it transparent
             try:
+                print(f"   Removing background from headshot...")
                 headshot_no_bg_bytes = ImageProcessor.remove_background(headshot_path)
                 headshot_img = Image.open(io.BytesIO(headshot_no_bg_bytes)).convert('RGBA')
+                
+                # Verify background was actually removed by checking alpha channel
+                # If all pixels are opaque, background removal may have failed
+                import numpy as np
+                alpha_channel = np.array(headshot_img.split()[3])
+                transparent_pixels = np.sum(alpha_channel < 255)
+                total_pixels = alpha_channel.size
+                transparency_ratio = transparent_pixels / total_pixels
+                
+                if transparency_ratio < 0.01:  # Less than 1% transparent pixels
+                    print(f"   Warning: Background removal may have failed (only {transparency_ratio*100:.1f}% transparent pixels)")
+                    print(f"   Attempting manual background removal...")
+                    # Try to manually remove white/light backgrounds
+                    headshot_img = self._remove_background_manual(headshot_img)
+                else:
+                    print(f"   ✓ Background removed successfully ({transparency_ratio*100:.1f}% transparent pixels)")
             except Exception as e:
-                print(f"Warning: Background removal failed, using original: {e}")
-                # Fallback: use original image
+                print(f"Warning: Background removal failed: {e}")
+                # Fallback: use original image and try manual removal
                 headshot_img = Image.open(headshot_path).convert('RGBA')
+                headshot_img = self._remove_background_manual(headshot_img)
 
             # Convert person to greyscale while preserving transparency
             try:
@@ -762,13 +827,13 @@ class HTMLSlideGenerator:
         # Create much larger image to accommodate rotated text (text will be rotated 90 degrees)
         # When rotated, width becomes height and height becomes width
         # Add extra padding to prevent cutoff - use larger padding for stroke effect
-        padding = 100  # Increased padding significantly
+        padding = 150  # Increased padding significantly to prevent cutoff
         stage_img_width = text_height + padding * 2  # Width after rotation
         stage_img_height = text_width + padding * 2  # Height after rotation
         
-        # Ensure minimum size to prevent cutoff
-        stage_img_width = max(stage_img_width, 300)
-        stage_img_height = max(stage_img_height, 500)
+        # Ensure minimum size to prevent cutoff - make it much larger
+        stage_img_width = max(stage_img_width, 400)
+        stage_img_height = max(stage_img_height, 700)  # Increased from 500 to 700
         
         stage_img = Image.new('RGBA', (stage_img_width, stage_img_height), (0, 0, 0, 0))
         stage_draw = ImageDraw.Draw(stage_img)
