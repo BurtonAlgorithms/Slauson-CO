@@ -208,20 +208,77 @@ class CanvaIntegration:
 
     def upload_pdf_asset(self, pdf_bytes: bytes, filename: str = "slide.pdf") -> str:
         """
-        Upload a PDF as an asset to Canva and return the asset/upload ID.
-        This lets us place the generated slide PDF into a Canva design if needed.
+        Upload a PDF to Canva using the Design Import API.
+        This imports the PDF as a design in Canva.
+        
+        Returns:
+            Design/import ID from Canva
         """
-        print(f"   Uploading PDF asset to Canva ({filename})...")
+        print(f"   Uploading PDF to Canva via Design Import API ({filename})...")
+        
+        import base64
+        import json
+        
+        # Canva Design Import API endpoint
+        import_endpoint = f"{self.base_url}/imports"
+        
+        # Prepare metadata - title should be base64 encoded
+        title = filename.replace('.pdf', '').replace('_', ' ')
+        title_base64 = base64.b64encode(title.encode('utf-8')).decode('utf-8')
+        
+        import_metadata = {
+            "title_base64": title_base64,
+            "mime_type": "application/pdf"
+        }
+        
+        try:
+            # Use Design Import API - send PDF as binary with metadata header
+            response = self._make_authenticated_request(
+                "post",
+                import_endpoint,
+                data=pdf_bytes,  # Send PDF as binary data
+                headers={
+                    "Content-Type": "application/octet-stream",
+                    "Import-Metadata": json.dumps(import_metadata)
+                }
+            )
+            
+            if response.status_code in [200, 201, 202]:
+                try:
+                    result = response.json()
+                    # The response should contain an import_id or design_id
+                    import_id = result.get("import_id") or result.get("id") or result.get("design_id")
+                    if import_id:
+                        print(f"   ✓ PDF imported to Canva (import_id: {import_id})")
+                        return import_id
+                    else:
+                        print(f"   Response keys: {list(result.keys())}")
+                        print(f"   Full response: {result}")
+                        # If it's async, might need to poll for status
+                        if "job_id" in result or "status" in result:
+                            print(f"   Import job created, status: {result.get('status', 'unknown')}")
+                            return result.get("job_id") or result.get("id")
+                except Exception as e:
+                    print(f"   Failed to parse import response: {e}")
+                    print(f"   Response: {response.text[:500]}")
+            else:
+                print(f"   Import failed ({response.status_code}): {response.text[:500]}")
+        
+        except Exception as e:
+            error_msg = str(e)
+            print(f"   PDF import failed: {error_msg}")
+            # Log response details if available
+            if hasattr(e, 'response') and hasattr(e.response, 'text'):
+                print(f"   Response details: {e.response.text[:500]}")
+            raise
+        
+        # Fallback: Try old endpoints if import API doesn't work
+        print(f"   ⚠️  Design Import API failed, trying legacy asset upload endpoints...")
         upload_endpoints = [
             f"{self.base_url}/assets/upload",
             f"{self.base_url}/assets",
-            "https://api.canva.com/rest/v1/assets/upload",
-            "https://api.canva.com/rest/v1/assets",
-            f"{self.base_url}/uploads",
-            "https://api.canva.com/rest/v1/uploads",
         ]
 
-        import base64
         pdf_base64 = base64.b64encode(pdf_bytes).decode("utf-8")
 
         for endpoint in upload_endpoints:
