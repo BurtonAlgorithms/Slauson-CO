@@ -266,16 +266,18 @@ class CanvaIntegration:
         
         except Exception as e:
             error_msg = str(e)
-            print(f"   PDF import failed: {error_msg}")
+            print(f"   PDF import failed with exception: {error_msg}")
             # Log response details if available
             if hasattr(e, 'response') and hasattr(e.response, 'text'):
                 print(f"   Response details: {e.response.text[:500]}")
-            # Don't raise - continue to fallback
-            print(f"   ⚠️  Design Import API failed, trying legacy asset upload endpoints...")
+            response = None  # Set to None so fallback runs
         
         # Fallback: Try old endpoints if import API doesn't work
-        if response.status_code not in [200, 201, 202]:
-            print(f"   ⚠️  Design Import API returned {response.status_code}, trying legacy endpoints...")
+        if not response or response.status_code not in [200, 201, 202]:
+            if response:
+                print(f"   ⚠️  Design Import API returned {response.status_code}, trying legacy endpoints...")
+            else:
+                print(f"   ⚠️  Design Import API failed, trying legacy asset upload endpoints...")
         upload_endpoints = [
             f"{self.base_url}/assets/upload",
             f"{self.base_url}/assets",
