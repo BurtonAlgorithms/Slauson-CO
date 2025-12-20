@@ -360,6 +360,10 @@ class HTMLSlideGenerator:
         founders_block_y = 400  # Approximate Y position of founders yellow block
         founders_text_x = 320  # Founders text X position
         
+        # Map boundaries for overlap detection
+        map_area_x = 1250
+        map_area_y = 110
+        
         # Company name position: aligned with founders but moved a bit to the left, significantly raised
         name_x = founders_text_x - 50  # Moved a bit to the left from founders position
         name_y = 120  # Lowered from 80 to move closer to content
@@ -367,15 +371,35 @@ class HTMLSlideGenerator:
         # Use orange color similar to the rest of the slide (lighter, more vibrant orange)
         name_color = (255, 140, 0)  # More vibrant orange, similar to slide orange
         
+        # Dynamic font sizing based on company name length to prevent overlap with map
+        # Start with base font size
+        base_font_size = 180
+        name_font_size = base_font_size
+        
+        # Calculate text width with base font to check for overlap
+        test_font = self._load_font(name_font_size, bold=True)
+        text_bbox = draw.textbbox((0, 0), company_name, font=test_font)
+        text_width = text_bbox[2] - text_bbox[0]
+        
+        # If text would overlap with map (map starts at x=1250), reduce font size
+        max_allowed_width = map_area_x - name_x - 50  # Leave 50px margin before map
+        if text_width > max_allowed_width:
+            # Calculate new font size to fit
+            name_font_size = int((max_allowed_width / text_width) * base_font_size)
+            # Ensure minimum readable size
+            name_font_size = max(100, name_font_size)
+            print(f"   Company name too long ({len(company_name)} chars), reducing font size to {name_font_size}px to avoid map overlap")
+        
         # Use very thick, bold font (matching the image style - extra thick and bold)
-        name_font = self._load_font(180, bold=True)
+        name_font = self._load_font(name_font_size, bold=True)
         
         # Draw company name with stroke (outline) to make it appear thicker
         # First draw the stroke (outline) in the same color but slightly darker
         stroke_color = (200, 80, 30)  # Slightly darker orange for stroke
         # Draw stroke by drawing text multiple times with slight offsets
-        for adj in range(-3, 4):
-            for adj2 in range(-3, 4):
+        stroke_width = 2 if name_font_size > 150 else 1  # Adjust stroke based on font size
+        for adj in range(-stroke_width, stroke_width + 1):
+            for adj2 in range(-stroke_width, stroke_width + 1):
                 if adj != 0 or adj2 != 0:
                     draw.text((name_x + adj, name_y + adj2), company_name, fill=stroke_color, font=name_font)
         
@@ -706,10 +730,13 @@ class HTMLSlideGenerator:
         # Use bigger, bolder font for sidebar text (similar size to company name but rotated)
         # Adjust size down for long labels like "PRE-SEED Q4 2024" to avoid cutoff
         stage_font_size = 40
-        if len(stage_text) > 14:
+        # Check for "PRE-SEED" or other long stage names
+        if "PRE-SEED" in stage_text or len(stage_text) > 14:
             stage_font_size = 34
         if len(stage_text) > 18:
             stage_font_size = 30
+        if len(stage_text) > 22:
+            stage_font_size = 26  # Extra small for very long text
         sidebar_bold_font = self._load_font(stage_font_size, bold=True)
         
         # Don't erase background - keep it transparent
