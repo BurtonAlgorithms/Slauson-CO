@@ -18,6 +18,8 @@ test_payload = {
     "company_data__address": "Los Angeles, CA",
     "company_data__investment_date": "2024-01-15",
     "company_data__investment_round": "PRE-SEED",
+    "company_data__quarter": "Q2",
+    "company_data__year": "2024",
     "company_data__founders": "John Gedmark, Ryan McLinko",
     "company_data__co_investors": "Blackrock, Fidelity",
     "company_data__background": "Astranis Space Technologies is a private American satellite manufacturer and service provider that aims to connect the unconnected. They are known for pioneering a new class of MicroGEO satellites—smaller, cheaper, and faster to build than traditional geostationary satellites.",
