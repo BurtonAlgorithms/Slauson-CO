@@ -666,22 +666,23 @@ class HTMLSlideGenerator:
         
         # 3. Updated Map Logic - Map is already in template, just add location text and adjust pin position
         try:
-            # Use hardcoded map bbox (stable, deterministic)
-            bbox = self._get_map_bbox()
+            # Reuse map bbox detected earlier (for company name overlap detection)
+            # map_area_x, map_area_y, map_width, map_height already set above
             
             # Get lat/lon for city
             latlon = self._geocode_city(location) or self._fallback_latlon(location)
             if not latlon:
                 latlon = (39.5, -98.35)  # fallback center US
             
+            # Debug prints to confirm bbox detection
+            print(f"   DEBUG map bbox: ({map_area_x}, {map_area_y}, {map_width}, {map_height})")
+            print(f"   DEBUG location: {location}, latlon: {latlon}")
+            
             lat, lon = latlon
-            map_x, map_y, map_w, map_h = bbox
-            pin_x, pin_y = self._latlon_to_map_xy(lat, lon, map_x, map_y, map_w, map_h)
+            pin_x, pin_y = self._latlon_to_map_xy(lat, lon, map_area_x, map_area_y, map_width, map_height)
             pin_y -= 6  # Small aesthetic offset
             
-            # Debug prints
-            print(f"   MAP_BBOX: {bbox}")
-            print(f"   CITY: {location}, LATLON: {latlon}, PIN: ({pin_x}, {pin_y})")
+            print(f"   PIN: ({pin_x}, {pin_y})")
             
             # Draw the pin (yellow location pin icon - teardrop shape with circular hole)
             yellow = (255, 215, 0)
