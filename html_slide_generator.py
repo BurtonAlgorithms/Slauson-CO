@@ -409,8 +409,8 @@ class HTMLSlideGenerator:
         # Adjust padding to match the actual map borders in your template
         # You may need to fine-tune these based on your specific template
         PAD_L = 0.03  # Left padding
-        PAD_R = 0.03  # Right padding  
-        PAD_T = 0.05  # Top padding
+        PAD_R = 0.05  # Right padding  
+        PAD_T = 0.08  # Top padding (increased to lower West Coast cities)
         PAD_B = 0.08  # Bottom padding
         
         inner_x = map_x + int(map_w * PAD_L)
