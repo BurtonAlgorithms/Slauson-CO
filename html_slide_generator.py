@@ -913,7 +913,7 @@ class HTMLSlideGenerator:
         # Paste at the right side of the orange sidebar (moved significantly to the right)
         # After rotation, the text runs vertically, positioned at the right edge of sidebar
         sidebar_width = 200  # Orange sidebar width
-        paste_x = sidebar_width - final_width - 20  # Position at right side of sidebar with padding
+        paste_x = sidebar_width - final_width - 5  # Position at right side of sidebar with minimal padding (moved further right)
         paste_y = max(20, stage_top_y)  # Ensure it doesn't go outside top edge
         
         slide.paste(stage_img, (paste_x, paste_y), stage_img)
