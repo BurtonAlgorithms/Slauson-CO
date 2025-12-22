@@ -15,7 +15,7 @@ WEBHOOK_URL = "http://localhost:5001/webhook/onboarding"  # Default port is 5001
 test_payload = {
     "company_data__name": "Astranis",
     "company_data__description": "Astranis Space Technologies is a private American satellite manufacturer and service provider that aims to connect the unconnected. They are known for pioneering a new class of MicroGEO satellites—smaller, cheaper, and faster to build than traditional geostationary satellites.",
-    "company_data__address": "Los Angeles, CA",
+    "company_data__address": "Miami, Florida",
     "company_data__investment_date": "2024-01-15",
     "company_data__investment_round": "PRE-SEED",
     "company_data__quarter": "Q2",
