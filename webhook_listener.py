@@ -457,34 +457,34 @@ def handle_onboarding():
                     results["errors"].append(f"Slide creation: {str(e)}")
                     raise
                 
-                        # Step 5: Upload PDF to Google Drive
-                        print("Uploading PDF to Google Drive...")
-                        # Define filename before both uploads so it's available for both
-                        filename = f"{company_data.get('name', 'slide').replace(' ', '_')}_slide.pdf"
-                        google_drive_link = None
-                        try:
-                            drive = GoogleDriveIntegration()
-                            google_drive_link = drive.upload_pdf(
-                                slide_pdf_bytes,
-                                filename,
-                                folder_id=Config.GOOGLE_DRIVE_FOLDER_ID
-                            )
-                            results["google_drive_link"] = google_drive_link
-                            print(f"✓ Uploaded to Google Drive: {google_drive_link}")
-                        except Exception as e:
-                            print(f"Warning: Google Drive upload failed: {e}")
-                            results["errors"].append(f"Google Drive: {str(e)}")
-                        
-                        # Step 6: Upload PDF to Canva as asset (required)
-                        canva_asset_id = None
-                        try:
-                            has_canva_creds = (
-                                (Config.CANVA_API_KEY or (Config.CANVA_CLIENT_ID and Config.CANVA_CLIENT_SECRET))
-                            )
-                            if has_canva_creds:
-                                print("Uploading slide PDF to Canva as asset...")
-                                canva = CanvaIntegration()
-                                canva_asset_id = canva.upload_pdf_asset(slide_pdf_bytes, filename)
+                # Step 5: Upload PDF to Google Drive
+                print("Uploading PDF to Google Drive...")
+                # Define filename before both uploads so it's available for both
+                filename = f"{company_data.get('name', 'slide').replace(' ', '_')}_slide.pdf"
+                google_drive_link = None
+                try:
+                    drive = GoogleDriveIntegration()
+                    google_drive_link = drive.upload_pdf(
+                        slide_pdf_bytes,
+                        filename,
+                        folder_id=Config.GOOGLE_DRIVE_FOLDER_ID
+                    )
+                    results["google_drive_link"] = google_drive_link
+                    print(f"✓ Uploaded to Google Drive: {google_drive_link}")
+                except Exception as e:
+                    print(f"Warning: Google Drive upload failed: {e}")
+                    results["errors"].append(f"Google Drive: {str(e)}")
+                
+                # Step 6: Upload PDF to Canva as asset (required)
+                canva_asset_id = None
+                try:
+                    has_canva_creds = (
+                        (Config.CANVA_API_KEY or (Config.CANVA_CLIENT_ID and Config.CANVA_CLIENT_SECRET))
+                    )
+                    if has_canva_creds:
+                        print("Uploading slide PDF to Canva as asset...")
+                        canva = CanvaIntegration()
+                        canva_asset_id = canva.upload_pdf_asset(slide_pdf_bytes, filename)
                         results["canva_asset_id"] = canva_asset_id
                         print(f"✓ Uploaded PDF to Canva assets: {canva_asset_id}")
                     else:
