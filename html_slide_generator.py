@@ -396,10 +396,11 @@ class HTMLSlideGenerator:
         }
         return LATLON.get(key)
     
-    def _snap_to_orange_outline(self, template_img: Image.Image, x: int, y: int, bbox: tuple, radius: int = 60):
+    def _snap_to_orange_outline(self, template_img: Image.Image, x: int, y: int, bbox: tuple, radius: int = 60, max_snap_dist: int = 25):
         """
         Snap pin coordinates to the nearest orange outline pixel.
         This makes the pin 'stick' to the actual coastline/outline.
+        max_snap_dist prevents snapping from jumping too far (e.g., to far-right outline).
         """
         map_x, map_y, map_w, map_h = bbox
         arr = np.array(template_img.convert("RGB"))
@@ -425,7 +426,14 @@ class HTMLSlideGenerator:
         dy = ys - (y - y0)
         idx = np.argmin(dx*dx + dy*dy)
         
-        return (x0 + int(xs[idx]), y0 + int(ys[idx]))
+        sx, sy = (x0 + int(xs[idx]), y0 + int(ys[idx]))
+        
+        # NEW: reject huge jumps (prevents snapping to far-right outline)
+        dist_sq = (sx - x) * (sx - x) + (sy - y) * (sy - y)
+        if dist_sq > max_snap_dist * max_snap_dist:
+            return x, y  # Snap too far, return original
+        
+        return sx, sy
     
     def _latlon_to_map_xy(self, lat: float, lon: float, map_area_x: int, map_area_y: int, map_w: int, map_h: int):
         """
@@ -433,7 +441,8 @@ class HTMLSlideGenerator:
         compensate for whitespace around the outline (esp. Atlantic on the right).
         """
         # Contiguous US-ish bounds
-        lon_min, lon_max = -125.0, -66.0
+        # Increasing lon_max from -66.0 to -60.0 pushes East Coast cities left
+        lon_min, lon_max = -125.0, -60.0
         lat_min, lat_max = 24.0, 49.0
         
         # Keep padding modest — you already have bbox + outline whitespace
@@ -724,7 +733,8 @@ class HTMLSlideGenerator:
             pin_x, pin_y = self._latlon_to_map_xy(lat, lon, map_area_x, map_area_y, map_width, map_height)
             
             # Snap pin to nearest orange outline pixel (makes pin stick to coastline)
-            pin_x, pin_y = self._snap_to_orange_outline(template, pin_x, pin_y, bbox, radius=80)
+            # Smaller radius and max_snap_dist prevent jumping to far-right outline
+            pin_x, pin_y = self._snap_to_orange_outline(template, pin_x, pin_y, bbox, radius=45, max_snap_dist=22)
             pin_y -= 6  # Small aesthetic offset
             
             # Debug prints to verify bbox detection stability and pin placement
