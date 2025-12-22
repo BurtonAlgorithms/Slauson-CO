@@ -305,56 +305,15 @@ class HTMLSlideGenerator:
             # Return original image if manual removal fails
             return img.convert('RGBA')
     
-    def _detect_orange_us_bbox(self, img: Image.Image):
+    def _get_map_bbox(self):
         """
-        Detect the orange US map outline bbox in the template.
-        Restricts search to the TOP-RIGHT region to avoid the orange sidebar.
-        Returns (x0, y0, w, h). Falls back if it fails.
+        Hardcoded bbox for the US map in the template (x, y, w, h).
+        This is the MOST stable approach: no detection, no snapping.
+        TODO: tweak these 4 values ONCE to match your template.
+        Start with these and adjust by looking at output.
         """
-        try:
-            W, H = img.size
-            arr = np.array(img.convert("RGB"))
-            
-            # --- ROI: where the map is on your template ---
-            # tune these if needed, but this matches your layout (map is top-right)
-            x_start = int(W * 0.55)
-            x_end   = int(W * 0.99)
-            y_start = int(H * 0.02)
-            y_end   = int(H * 0.45)
-            
-            roi = arr[y_start:y_end, x_start:x_end]
-            r, g, b = roi[..., 0], roi[..., 1], roi[..., 2]
-            
-            # Orange outline is bright orange lines, not a solid block:
-            # loosen thresholds a bit so thin lines still count
-            orange_mask = (r > 160) & (g > 80) & (g < 210) & (b < 140)
-            
-            ys, xs = np.where(orange_mask)
-            if len(xs) < 300:  # thin outlines -> fewer pixels; don't require 2000
-                print(f"   Warning: Only {len(xs)} orange pixels in ROI, using fallback bbox")
-                return (1250, 110, 620, 450)
-            
-            # bbox in ROI coords
-            x0r, x1r = int(xs.min()), int(xs.max())
-            y0r, y1r = int(ys.min()), int(ys.max())
-            
-            # Convert ROI bbox back to full-image coords
-            x0 = x_start + x0r
-            x1 = x_start + x1r
-            y0 = y_start + y0r
-            y1 = y_start + y1r
-            
-            pad = 10
-            x0 = max(0, x0 - pad)
-            y0 = max(0, y0 - pad)
-            x1 = min(W - 1, x1 + pad)
-            y1 = min(H - 1, y1 + pad)
-            
-            print(f"   Detected MAP bbox (ROI): ({x0}, {y0}, {x1-x0}, {y1-y0})")
-            return (x0, y0, x1 - x0, y1 - y0)
-        except Exception as e:
-            print(f"   Warning: Error detecting orange bbox: {e}, using fallback")
-            return (1250, 110, 620, 450)
+        # Hardcoded bbox - adjust these 4 values to match your template
+        return (1245, 95, 640, 360)
     
     @lru_cache(maxsize=256)
     def _geocode_city(self, city: str):
@@ -396,80 +355,48 @@ class HTMLSlideGenerator:
         }
         return LATLON.get(key)
     
-    def _snap_to_orange_outline(self, template_img: Image.Image, x: int, y: int, bbox: tuple, radius: int = 60, max_snap_dist: int = 25):
+    
+    def _latlon_to_map_xy(self, lat: float, lon: float, bbox: tuple):
         """
-        Snap pin coordinates to the nearest orange outline pixel.
-        This makes the pin 'stick' to the actual coastline/outline.
-        max_snap_dist prevents snapping from jumping too far (e.g., to far-right outline).
+        Robust-ish projection for a stylized contiguous US map:
+        - linear lat/lon -> bbox
+        - small non-linear correction on x so West/East land where your template expects
         """
         map_x, map_y, map_w, map_h = bbox
-        arr = np.array(template_img.convert("RGB"))
         
-        # Define search region around the pin
-        x0 = max(map_x, x - radius)
-        x1 = min(map_x + map_w - 1, x + radius)
-        y0 = max(map_y, y - radius)
-        y1 = min(map_y + map_h - 1, y + radius)
+        # Contiguous US bounds (tuned to templates like yours)
+        lon_min, lon_max = -125.0, -66.0
+        lat_min, lat_max = 24.0, 49.5
         
-        roi = arr[y0:y1+1, x0:x1+1]
-        r, g, b = roi[..., 0], roi[..., 1], roi[..., 2]
-        
-        # Same orange threshold used for bbox detection
-        mask = (r > 160) & (g > 80) & (g < 210) & (b < 140)
-        
-        ys, xs = np.where(mask)
-        if len(xs) == 0:
-            return x, y  # Nothing to snap to, return original
-        
-        # Find nearest pixel in ROI coords
-        dx = xs - (x - x0)
-        dy = ys - (y - y0)
-        idx = np.argmin(dx*dx + dy*dy)
-        
-        sx, sy = (x0 + int(xs[idx]), y0 + int(ys[idx]))
-        
-        # NEW: reject huge jumps (prevents snapping to far-right outline)
-        dist_sq = (sx - x) * (sx - x) + (sy - y) * (sy - y)
-        if dist_sq > max_snap_dist * max_snap_dist:
-            return x, y  # Snap too far, return original
-        
-        return sx, sy
-    
-    def _latlon_to_map_xy(self, lat: float, lon: float, map_area_x: int, map_area_y: int, map_w: int, map_h: int):
-        """
-        Map lat/lon into the US map bbox, but shrink to an inner area to
-        compensate for whitespace around the outline (esp. Atlantic on the right).
-        """
-        # Contiguous US-ish bounds
-        # Increasing lon_max from -66.0 to -60.0 pushes East Coast cities left
-        lon_min, lon_max = -125.0, -60.0
-        lat_min, lat_max = 24.0, 49.0
-        
-        # Keep padding modest — you already have bbox + outline whitespace
-        PAD_L = 0.06
-        PAD_R = 0.06   # Reduced from 0.24 (was too big, causing double east shrink)
-        PAD_T = 0.08
-        PAD_B = 0.10
-        
-        inner_x = map_area_x + int(map_w * PAD_L)
-        inner_y = map_area_y + int(map_h * PAD_T)
-        inner_w = int(map_w * (1.0 - PAD_L - PAD_R))
-        inner_h = int(map_h * (1.0 - PAD_T - PAD_B))
-        
-        # Clamp to bounds so weird geocodes don't fly off-map
+        # Clamp
         lon = max(lon_min, min(lon_max, lon))
         lat = max(lat_min, min(lat_max, lat))
         
-        x_norm = (lon - lon_min) / (lon_max - lon_min)          # west->east
-        y_norm = 1.0 - (lat - lat_min) / (lat_max - lat_min)    # north->south (invert)
+        # Normalize
+        x = (lon - lon_min) / (lon_max - lon_min)          # 0..1 west->east
+        y = 1.0 - (lat - lat_min) / (lat_max - lat_min)    # 0..1 north->south
         
-        # REMOVED east compression - was causing double east shrink with PAD_R
-        # If NYC is slightly too far right, bump PAD_R to 0.08-0.10
-        # If NYC is too far left, reduce PAD_R to 0.03-0.05
+        # --- Template correction ---
+        # Stylized US maps usually make the East Coast look "wider" and the West more "compressed".
+        # This curve nudges points to match that feel.
+        #
+        # If East is too far RIGHT -> increase gamma slightly (e.g. 1.12 -> 1.18)
+        # If West is too far LEFT  -> decrease gamma slightly (e.g. 1.12 -> 1.07)
+        gamma = 1.12
+        x = x ** gamma
         
-        x = inner_x + int(x_norm * inner_w)
-        y = inner_y + int(y_norm * inner_h)
-        return x, y
+        # Small padding so pins don't touch borders
+        pad_x = int(map_w * 0.06)
+        pad_y = int(map_h * 0.10)
+        
+        inner_x = map_x + pad_x
+        inner_y = map_y + pad_y
+        inner_w = map_w - 2 * pad_x
+        inner_h = map_h - 2 * pad_y
+        
+        px = inner_x + int(x * inner_w)
+        py = inner_y + int(y * inner_h)
+        return px, py
     
     def _get_city_coordinates(self, city_name: str) -> tuple:
         """
@@ -626,8 +553,8 @@ class HTMLSlideGenerator:
         founders_block_y = 400  # Approximate Y position of founders yellow block
         founders_text_x = 320  # Founders text X position
         
-        # Auto-detect orange US map bounding box from template (for overlap detection)
-        map_area_x, map_area_y, map_width, map_height = self._detect_orange_us_bbox(template)
+        # Use hardcoded map bbox (stable, no detection needed)
+        map_area_x, map_area_y, map_width, map_height = self._get_map_bbox()
         
         # Company name position: aligned with founders but moved a bit to the left, significantly raised
         name_x = founders_text_x - 50  # Moved a bit to the left from founders position
@@ -709,36 +636,20 @@ class HTMLSlideGenerator:
         
         # 3. Updated Map Logic - Map is already in template, just add location text and adjust pin position
         try:
-            # Reuse map bbox detected earlier (for company name overlap detection)
-            # map_area_x, map_area_y, map_width, map_height already set above
+            # Use hardcoded map bbox (stable, deterministic)
+            bbox = self._get_map_bbox()
             
-            # Always use lat/lon projection (never normalized coordinates) for consistency
-            # Geocode city to get real lat/lon
-            latlon = self._geocode_city(location)
-            
-            # If geocoding fails, try lat/lon fallback (uses same projection math)
+            # Get lat/lon for city
+            latlon = self._geocode_city(location) or self._fallback_latlon(location)
             if not latlon:
-                latlon = self._fallback_latlon(location)
-                if latlon:
-                    print(f"   Using lat/lon fallback for '{location}': {latlon}")
+                latlon = (39.5, -98.35)  # fallback center US
             
-            # Absolute last resort: use geographic center of contiguous US
-            if not latlon:
-                latlon = (39.5, -98.35)  # roughly geographic center of contiguous US
-                print(f"   Using default center coordinates for '{location}'")
-            
-            # All paths now use the same lat/lon projection math
             lat, lon = latlon
-            bbox = (map_area_x, map_area_y, map_width, map_height)
-            pin_x, pin_y = self._latlon_to_map_xy(lat, lon, map_area_x, map_area_y, map_width, map_height)
-            
-            # Snap pin to nearest orange outline pixel (makes pin stick to coastline)
-            # Smaller radius and max_snap_dist prevent jumping to far-right outline
-            pin_x, pin_y = self._snap_to_orange_outline(template, pin_x, pin_y, bbox, radius=45, max_snap_dist=22)
+            pin_x, pin_y = self._latlon_to_map_xy(lat, lon, bbox)
             pin_y -= 6  # Small aesthetic offset
             
-            # Debug prints to verify bbox detection stability and pin placement
-            print(f"   MAP_BBOX: ({map_area_x}, {map_area_y}, {map_width}, {map_height})")
+            # Debug prints
+            print(f"   MAP_BBOX: {bbox}")
             print(f"   CITY: {location}, LATLON: {latlon}, PIN: ({pin_x}, {pin_y})")
             
             # Draw the pin (yellow location pin icon - teardrop shape with circular hole)
