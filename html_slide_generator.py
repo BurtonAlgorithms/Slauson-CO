@@ -11,6 +11,7 @@ import hashlib
 import img2pdf
 from collections import Counter
 import numpy as np
+from functools import lru_cache
 
 # Fix for reportlab compatibility
 try:
@@ -355,10 +356,12 @@ class HTMLSlideGenerator:
             print(f"   Warning: Error detecting orange bbox: {e}, using fallback")
             return (1250, 110, 620, 450)
     
+    @lru_cache(maxsize=256)
     def _geocode_city(self, city: str):
         """
         Geocode city name to (lat, lon) using geopy.
         Returns (lat, lon) or None.
+        Cached to avoid rate limits and improve performance.
         """
         try:
             from geopy.geocoders import Nominatim
@@ -403,10 +406,10 @@ class HTMLSlideGenerator:
         lat_min, lat_max = 24.0, 49.0
         
         # --- IMPORTANT: inner padding to match your template's outline placement ---
-        # Increase RIGHT pad to pull East Coast left.
-        PAD_L = 0.05
-        PAD_R = 0.20   # Key for East Coast cities (Miami, NYC) - adjust if needed
-        PAD_T = 0.06
+        # Safer starting point - tune with consistent lat/lon method
+        PAD_L = 0.06
+        PAD_R = 0.12   # Reduced from 0.20 - tune if needed
+        PAD_T = 0.08
         PAD_B = 0.10
         
         inner_x = map_area_x + int(map_w * PAD_L)
