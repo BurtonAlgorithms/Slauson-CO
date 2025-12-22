@@ -583,8 +583,9 @@ class HTMLSlideGenerator:
         founders_block_y = 400  # Approximate Y position of founders yellow block
         founders_text_x = 320  # Founders text X position
         
-        # Use hardcoded map bbox (stable, no detection needed)
-        map_area_x, map_area_y, map_width, map_height = self._get_map_bbox()
+        # Detect orange US map bounding box from template (restricted to top-right ROI)
+        # Do this once and reuse for both company name overlap detection and map pin placement
+        map_area_x, map_area_y, map_width, map_height = self._detect_orange_us_bbox(template)
         
         # Company name position: aligned with founders but moved a bit to the left, significantly raised
         name_x = founders_text_x - 50  # Moved a bit to the left from founders position
