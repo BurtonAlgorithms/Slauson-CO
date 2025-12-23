@@ -1049,8 +1049,20 @@ class HTMLSlideGenerator:
                 if not use_api_removal:
                     print(f"   REMOVEBG_API_KEY not set, using manual background removal...")
                     # Skip API call and go straight to manual removal
-                    headshot_img = Image.open(headshot_path).convert('RGBA')
-                    headshot_img = self._remove_background_manual(headshot_img)
+                    # But make it fast - if it takes too long or fails, just use the image as-is
+                    try:
+                        headshot_img = Image.open(headshot_path).convert('RGBA')
+                        # Resize image first to reduce memory usage (max 1000px on longest side)
+                        max_size = 1000
+                        if max(headshot_img.size) > max_size:
+                            ratio = max_size / max(headshot_img.size)
+                            new_size = (int(headshot_img.size[0] * ratio), int(headshot_img.size[1] * ratio))
+                            headshot_img = headshot_img.resize(new_size, Image.Resampling.LANCZOS)
+                        # Try manual removal, but don't let it hang
+                        headshot_img = self._remove_background_manual(headshot_img)
+                    except Exception as e:
+                        print(f"   Warning: Manual background removal failed: {e}, using original image")
+                        headshot_img = Image.open(headshot_path).convert('RGBA')
                 else:
                     try:
                         print(f"   Removing background from headshot...")
