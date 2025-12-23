@@ -613,72 +613,49 @@ class CanvaIntegration:
     
     def _get_access_token(self) -> str:
         """
-        Get OAuth access token using client credentials flow or stored tokens.
+        Get OAuth access token using stored tokens or refresh token flow.
         
         Priority:
-        1. Client credentials flow (if client_id and client_secret are available)
-        2. Stored OAuth access token (if available and not expired)
+        1. Stored OAuth access token (if available)
+        2. Refresh token flow (if refresh token is available)
         3. API key (if no OAuth setup)
+        
+        Note: Canva doesn't support client_credentials grant type, only authorization_code and refresh_token.
         
         Returns:
             Access token string
         """
-        # Try client credentials flow first (simplest, no user interaction needed)
-        if self.client_id and self.client_secret:
-            # Check if we have a cached token that's still valid
-            if self._access_token:
-                # For now, try using cached token, will refresh if it fails
-                return self._access_token
-            
-            # Get new token using client credentials flow
-            try:
-                print("   Getting access token using client credentials flow...")
-                # OAuth 2.0 token endpoint expects form-encoded data, not JSON
-                response = requests.post(
-                    "https://api.canva.com/rest/v1/oauth/token",
-                    data={
-                        "grant_type": "client_credentials",
-                        "client_id": self.client_id,
-                        "client_secret": self.client_secret,
-                        "scope": "design:read design:write asset:read asset:write"
-                    },
-                    headers={"Content-Type": "application/x-www-form-urlencoded"}
-                )
-                
-                if response.status_code == 200:
-                    token_data = response.json()
-                    access_token = token_data.get("access_token")
-                    if access_token:
-                        # Cache the token
-                        self._access_token = access_token
-                        self._save_tokens()
-                        print("   ✓ Access token obtained via client credentials")
-                        return access_token
-                    else:
-                        print(f"   ⚠️  No access_token in response: {response.json()}")
-                else:
-                    print(f"   ⚠️  Client credentials flow failed ({response.status_code}): {response.text[:200]}")
-            except Exception as e:
-                print(f"   ⚠️  Client credentials flow error: {e}")
-        
-        # Fallback: Use stored OAuth token if available
+        # Priority 1: Try stored access token first
         if self._access_token:
+            print("   Using stored Canva access token")
             return self._access_token
         
-        # Fallback: Use API key directly (if client_id is actually the API key)
+        # Priority 2: Try refresh token flow (if refresh token is available)
+        if self._refresh_token and self.client_id and self.client_secret:
+            try:
+                print("   Attempting to refresh Canva access token...")
+                return self._refresh_access_token()
+            except Exception as e:
+                print(f"   ⚠️  Could not refresh token: {e}")
+                print("   Please run: python setup_canva_oauth.py to re-authenticate")
+        
+        # Priority 3: Use API key directly (if client_id is actually the API key)
         if self.api_key:
             return self.api_key
         
-        # If client_id is set but no token, try client credentials one more time
+        # If we have client_id/secret but no tokens, user needs to set up OAuth
         if self.client_id and self.client_secret:
             raise ValueError(
-                "Failed to obtain access token using client credentials flow. "
-                "Please check your CANVA_CLIENT_ID and CANVA_CLIENT_SECRET in .env"
+                "Canva OAuth not set up. Canva doesn't support client_credentials flow.\n"
+                "Please run: python setup_canva_oauth.py to set up OAuth authentication.\n"
+                "This will use authorization_code flow (requires one-time browser login)."
             )
         
         raise ValueError(
-            "Either CANVA_API_KEY or both CANVA_CLIENT_ID and CANVA_CLIENT_SECRET must be configured.\n"
-            "Note: CANVA_CLIENT_ID should be your Canva API key."
+            "Canva authentication not configured.\n"
+            "Options:\n"
+            "1. Set CANVA_API_KEY (if you have a direct API key)\n"
+            "2. Set CANVA_CLIENT_ID and CANVA_CLIENT_SECRET, then run: python setup_canva_oauth.py"
         )
     
     def _make_authenticated_request(self, method: str, url: str, **kwargs):
