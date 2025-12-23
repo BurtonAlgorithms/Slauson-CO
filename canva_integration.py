@@ -558,17 +558,12 @@ class CanvaIntegration:
         for token_url in token_endpoints:
             try:
                 print(f"   Trying refresh endpoint: {token_url}")
-                # REST API endpoint expects JSON, others use form-urlencoded
-                if "rest/v1" in token_url:
-                    # REST API endpoint - use JSON
-                    response = requests.post(
-                        token_url, 
-                        json=data, 
-                        headers={"Content-Type": "application/json"}
-                    )
-                else:
-                    # Other endpoints - use form-urlencoded
-                    response = requests.post(token_url, data=data)
+                # OAuth 2.0 token endpoints expect form-urlencoded data (not JSON)
+                response = requests.post(
+                    token_url, 
+                    data=data,
+                    headers={"Content-Type": "application/x-www-form-urlencoded"}
+                )
                 
                 if response.status_code == 200:
                     tokens = response.json()
@@ -638,16 +633,16 @@ class CanvaIntegration:
             # Get new token using client credentials flow
             try:
                 print("   Getting access token using client credentials flow...")
-                # REST API endpoint expects JSON payload
+                # OAuth 2.0 token endpoint expects form-encoded data, not JSON
                 response = requests.post(
                     "https://api.canva.com/rest/v1/oauth/token",
-                    json={
+                    data={
                         "grant_type": "client_credentials",
                         "client_id": self.client_id,
                         "client_secret": self.client_secret,
                         "scope": "design:read design:write asset:read asset:write"
                     },
-                    headers={"Content-Type": "application/json"}
+                    headers={"Content-Type": "application/x-www-form-urlencoded"}
                 )
                 
                 if response.status_code == 200:
