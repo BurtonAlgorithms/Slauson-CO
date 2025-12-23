@@ -6,7 +6,7 @@ Supports both PDF and image templates (JPG, PNG, etc.)
 import os
 from typing import Dict, Optional
 import io
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageFilter
 import hashlib
 import img2pdf
 from collections import Counter
@@ -216,103 +216,73 @@ class HTMLSlideGenerator:
         
         return (255, 140, 0) if y < 200 else (255, 255, 255)
     
-    def _remove_background_manual(self, img: Image.Image) -> Image.Image:
+    def _remove_background_manual(self, img: Image.Image, tol: int = 38, feather: int = 2) -> Image.Image:
         """
-        Manually remove white/light backgrounds from an image using thresholding.
-        This is a fallback when Remove.bg API fails or isn't available.
-        Uses multiple techniques for better background removal.
+        Background removal that avoids 'holes' in the subject.
+        Flood-fills from the BORDER based on color similarity to a sampled background color.
+        Works well for headshots with plain/neutral walls.
         """
         try:
             import numpy as np
-            
-            # Convert to numpy array
-            img_array = np.array(img)
-            
-            # If image is RGBA, work with RGB channels
-            if img_array.shape[2] == 4:
-                rgb = img_array[:, :, :3]
-                alpha = img_array[:, :, 3]
-            else:
-                rgb = img_array
-                alpha = np.ones((img_array.shape[0], img_array.shape[1]), dtype=np.uint8) * 255
-            
-            # Method 1: Brightness threshold (remove light backgrounds)
-            brightness = np.mean(rgb, axis=2)
-            brightness_mask = (brightness < 200).astype(np.uint8) * 255  # Remove pixels brighter than 200
-            
-            # Method 2: Color similarity (remove white/light grey backgrounds)
-            # White/light backgrounds have high values in all RGB channels
-            white_threshold = 200
-            is_white = (rgb[:, :, 0] > white_threshold) & (rgb[:, :, 1] > white_threshold) & (rgb[:, :, 2] > white_threshold)
-            white_mask = (~is_white).astype(np.uint8) * 255
-            
-            # Method 3: Edge detection - keep edges (likely foreground)
-            try:
-                from scipy import ndimage
-                # Convert to grayscale for edge detection
-                gray = np.mean(rgb, axis=2)
-                # Apply Sobel edge detection
-                sobel_x = ndimage.sobel(gray, axis=1)
-                sobel_y = ndimage.sobel(gray, axis=0)
-                edges = np.sqrt(sobel_x**2 + sobel_y**2)
-                # Keep areas with edges (likely foreground)
-                edge_mask = (edges > 10).astype(np.uint8) * 255
-            except ImportError:
-                # scipy not available, skip edge detection
-                edge_mask = np.ones_like(brightness_mask) * 255
-            except Exception:
-                edge_mask = np.ones_like(brightness_mask) * 255  # If edge detection fails, don't use it
-            
-            # Combine masks: keep pixels that pass brightness AND white check, OR have edges
-            combined_mask = np.minimum(brightness_mask, white_mask)
-            # Also keep edge areas even if they're bright (might be foreground details)
-            combined_mask = np.maximum(combined_mask, edge_mask)
-            
-            # Apply mask to alpha channel
-            new_alpha = np.minimum(alpha, combined_mask)
-            
-            # Combine RGB with new alpha
-            if img_array.shape[2] == 4:
-                result_array = np.dstack((rgb, new_alpha))
-            else:
-                result_array = np.dstack((rgb, new_alpha))
-            
-            # Convert back to PIL Image
-            result_img = Image.fromarray(result_array, 'RGBA')
-            return result_img
-            
         except ImportError:
-            # If scipy not available, use simpler method
-            try:
-                import numpy as np
-                img_array = np.array(img)
-                if img_array.shape[2] == 4:
-                    rgb = img_array[:, :, :3]
-                    alpha = img_array[:, :, 3]
-                else:
-                    rgb = img_array
-                    alpha = np.ones((img_array.shape[0], img_array.shape[1]), dtype=np.uint8) * 255
-                
-                brightness = np.mean(rgb, axis=2)
-                white_threshold = 200
-                is_white = (rgb[:, :, 0] > white_threshold) & (rgb[:, :, 1] > white_threshold) & (rgb[:, :, 2] > white_threshold)
-                mask = (~is_white).astype(np.uint8) * 255
-                new_alpha = np.minimum(alpha, mask)
-                
-                if img_array.shape[2] == 4:
-                    result_array = np.dstack((rgb, new_alpha))
-                else:
-                    result_array = np.dstack((rgb, new_alpha))
-                
-                result_img = Image.fromarray(result_array, 'RGBA')
-                return result_img
-            except Exception as e:
-                print(f"   Warning: Manual background removal failed: {e}")
-                return img.convert('RGBA')
-        except Exception as e:
-            print(f"   Warning: Manual background removal failed: {e}")
-            # Return original image if manual removal fails
-            return img.convert('RGBA')
+            print("   Warning: numpy not available for manual background removal")
+            return img.convert("RGBA")
+
+        img = img.convert("RGBA")
+        arr = np.array(img)
+        rgb = arr[..., :3].astype(np.int16)
+        alpha = arr[..., 3].astype(np.uint8)
+
+        H, W = rgb.shape[:2]
+
+        # Sample background color from border pixels
+        border = np.concatenate([
+            rgb[0, :, :], rgb[-1, :, :],
+            rgb[:, 0, :], rgb[:, -1, :]
+        ], axis=0)
+        bg = np.median(border, axis=0).astype(np.int16)
+
+        # Mask of pixels close to background color
+        dist = np.sqrt(((rgb - bg) ** 2).sum(axis=2))
+        close = dist <= tol
+
+        # Flood fill from edges to find background connected to border
+        bg_mask = np.zeros((H, W), dtype=bool)
+        from collections import deque
+        q = deque()
+
+        def push(y, x):
+            if 0 <= y < H and 0 <= x < W and close[y, x] and not bg_mask[y, x]:
+                bg_mask[y, x] = True
+                q.append((y, x))
+
+        for x in range(W):
+            push(0, x)
+            push(H - 1, x)
+        for y in range(H):
+            push(y, 0)
+            push(y, W - 1)
+
+        while q:
+            y, x = q.popleft()
+            push(y - 1, x)
+            push(y + 1, x)
+            push(y, x - 1)
+            push(y, x + 1)
+
+        # Remove only border-connected background
+        new_alpha = alpha.copy()
+        new_alpha[bg_mask] = 0
+
+        out = arr.copy()
+        out[..., 3] = new_alpha
+        out_img = Image.fromarray(out, "RGBA")
+
+        if feather and feather > 0:
+            a = out_img.split()[-1].filter(ImageFilter.GaussianBlur(radius=feather))
+            out_img.putalpha(a)
+
+        return out_img
     
     def _detect_orange_us_bbox(self, img: Image.Image):
         """
@@ -1099,21 +1069,6 @@ class HTMLSlideGenerator:
                         headshot_img = self._remove_background_manual(headshot_img)
                     except Exception as e:
                         print(f"   Warning: fallback background removal failed: {e}")
-
-                    # Extra aggressive background knock-out on bright/neutral walls
-                    try:
-                        arr = np.array(headshot_img)
-                        if arr.shape[2] >= 4:
-                            rgb = arr[..., :3]
-                            alpha = arr[..., 3]
-                            gray = rgb.mean(axis=2)
-                            # Treat bright background as transparent
-                            bg_mask = gray > 170  # brighten threshold (tune if needed)
-                            alpha[bg_mask] = (alpha[bg_mask] * 0.1).astype(np.uint8)  # nearly transparent
-                            arr[..., 3] = alpha
-                            headshot_img = Image.fromarray(arr, 'RGBA')
-                    except Exception as e:
-                        print(f"   Warning: extra background cleanup failed: {e}")
 
                     # Convert person to greyscale while preserving transparency
                     try:
