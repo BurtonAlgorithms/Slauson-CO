@@ -23,14 +23,57 @@ app = Flask(__name__)
 
 def download_file_from_url(url: str, output_path: str):
     """
-    Download file from URL (handles Notion file URLs).
+    Download file from URL (handles Notion file URLs and Google Drive URLs).
     
     Args:
         url: URL to download from
         output_path: Path to save file
     """
-    response = requests.get(url, stream=True)
+    # Handle Google Drive URLs in different formats
+    if 'drive.google.com' in url:
+        # Extract file ID from various Google Drive URL formats
+        import re
+        file_id = None
+        
+        # Format 1: https://drive.google.com/open?id=FILE_ID
+        match = re.search(r'[?&]id=([a-zA-Z0-9_-]+)', url)
+        if match:
+            file_id = match.group(1)
+        # Format 2: https://drive.google.com/file/d/FILE_ID/view
+        else:
+            match = re.search(r'/file/d/([a-zA-Z0-9_-]+)', url)
+            if match:
+                file_id = match.group(1)
+        
+        if file_id:
+            # Convert to direct download URL
+            url = f"https://drive.google.com/uc?export=download&id={file_id}"
+            print(f"  Converting Google Drive URL to direct download: {file_id}")
+    
+    # Try to download with authentication headers if it's a Google Drive file
+    headers = {}
+    if 'drive.google.com' in url:
+        # Add headers to handle Google Drive's virus scan warning
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+    
+    response = requests.get(url, stream=True, headers=headers, allow_redirects=True)
     response.raise_for_status()
+    
+    # Handle Google Drive's virus scan warning page
+    if 'text/html' in response.headers.get('Content-Type', ''):
+        # Try to extract the actual download link from the warning page
+        content = response.text
+        if 'virus scan warning' in content.lower() or 'download anyway' in content.lower():
+            # Extract the actual download link
+            import re
+            match = re.search(r'href="(/uc\?export=download[^"]+)"', content)
+            if match:
+                download_url = 'https://drive.google.com' + match.group(1)
+                print(f"  Found download link after virus scan warning, retrying...")
+                response = requests.get(download_url, stream=True, headers=headers, allow_redirects=True)
+                response.raise_for_status()
     
     with open(output_path, 'wb') as f:
         for chunk in response.iter_content(chunk_size=8192):
@@ -234,31 +277,55 @@ def handle_onboarding():
             
             # Handle headshot - check multiple possible field names
             if "headshot" in data:
-                headshot_path = handle_image_input(
-                    data["headshot"],
-                    temp_dir,
-                    "headshot.jpg"
-                )
+                try:
+                    headshot_path = handle_image_input(
+                        data["headshot"],
+                        temp_dir,
+                        "headshot.jpg"
+                    )
+                except Exception as e:
+                    print(f"Warning: Failed to process headshot from 'headshot' field: {e}")
+                    headshot_path = None
             elif "headshot_url" in data:
-                headshot_path = handle_image_input(
-                    data["headshot_url"],
-                    temp_dir,
-                    "headshot.jpg"
-                )
+                try:
+                    print(f"Downloading headshot from URL: {data['headshot_url'][:100]}...")
+                    headshot_path = handle_image_input(
+                        data["headshot_url"],
+                        temp_dir,
+                        "headshot.jpg"
+                    )
+                    print(f"✓ Headshot downloaded successfully")
+                except Exception as e:
+                    print(f"Warning: Failed to download headshot from URL: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    headshot_path = None
             
             # Handle logo - check multiple possible field names
             if "logo" in data:
-                logo_path = handle_image_input(
-                    data["logo"],
-                    temp_dir,
-                    "logo.png"
-                )
+                try:
+                    logo_path = handle_image_input(
+                        data["logo"],
+                        temp_dir,
+                        "logo.png"
+                    )
+                except Exception as e:
+                    print(f"Warning: Failed to process logo from 'logo' field: {e}")
+                    logo_path = None
             elif "logo_url" in data:
-                logo_path = handle_image_input(
-                    data["logo_url"],
-                    temp_dir,
-                    "logo.png"
-                )
+                try:
+                    print(f"Downloading logo from URL: {data['logo_url'][:100]}...")
+                    logo_path = handle_image_input(
+                        data["logo_url"],
+                        temp_dir,
+                        "logo.png"
+                    )
+                    print(f"✓ Logo downloaded successfully")
+                except Exception as e:
+                    print(f"Warning: Failed to download logo from URL: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    logo_path = None
             
             # Headshot and logo are optional - check if they exist in company_data
             if not headshot_path:
@@ -555,6 +622,9 @@ def handle_onboarding():
                         and Config.CANVA_TEMPLATE_ID
                     )
                     if has_canva_creds:
+                        # Ensure filename is defined (should be from Step 7, but double-check)
+                        if 'filename' not in locals():
+                            filename = f"{company_data.get('name', 'slide').replace(' ', '_')}_slide.pdf"
                         print("Uploading slide PDF to Canva as asset...")
                         canva = CanvaIntegration()
                         canva_asset_id = canva.upload_pdf_asset(slide_pdf_bytes, filename)
