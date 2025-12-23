@@ -1265,9 +1265,9 @@ class HTMLSlideGenerator:
             stage_img = stage_img.resize((new_w, new_h), Image.Resampling.LANCZOS)
             final_w, final_h = stage_img.size
         
-        # Compute placement (centered in sidebar, near top)
-        paste_x = side_margin + (max_w - final_w) // 2
-        paste_y = top_margin
+        # Compute placement
+        paste_x = 10              # align with SLAUSON&CO left
+        paste_y = top_margin + 25 # lower it
         
         # Clamp so it can NEVER go off-canvas
         paste_x = max(0, min(paste_x, sidebar_w - final_w))
@@ -1488,8 +1488,8 @@ class HTMLSlideGenerator:
             investment_stage = f"{round_val} {quarter_val} {year_val}"
         
         if investment_stage:
-            paste_x_px = 10
-            paste_y_px = 50
+            paste_x_px = 14   # slightly right
+            paste_y_px = 70   # lower
             
             # Make the textbox TALL/WIDE BEFORE rotation so it has room after rotation.
             # Use most of the slide height.
