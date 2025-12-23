@@ -1224,24 +1224,25 @@ class HTMLSlideGenerator:
         text_width = bbox[2] - bbox[0]
         text_height = bbox[3] - bbox[1]
         
-        # Create image to accommodate rotated text (text will be rotated 180 degrees - upside down)
-        # When rotated 180 degrees, dimensions stay the same but text is flipped
+        # Create much larger image to accommodate rotated text (text will be rotated 90 degrees counter-clockwise)
+        # When rotated, width becomes height and height becomes width
         # Add extra padding to prevent cutoff - use larger padding for stroke effect
-        padding = 50
-        stage_img_width = text_width + padding * 2
-        stage_img_height = text_height + padding * 2
+        padding = 150  # Increased padding significantly to prevent cutoff
+        stage_img_width = text_height + padding * 2  # Width after rotation
+        stage_img_height = text_width + padding * 2  # Height after rotation
         
-        # Ensure minimum size to prevent cutoff
-        stage_img_width = max(stage_img_width, 300)
-        stage_img_height = max(stage_img_height, 150)
+        # Ensure minimum size to prevent cutoff - make it much larger
+        stage_img_width = max(stage_img_width, 400)
+        stage_img_height = max(stage_img_height, 700)  # Increased from 500 to 700
         
         stage_img = Image.new('RGBA', (stage_img_width, stage_img_height), (0, 0, 0, 0))
         stage_draw = ImageDraw.Draw(stage_img)
         
-        # Center text in the image before rotation
-        # After 180 degree rotation, it will be centered but upside down
-        text_x = stage_img_width // 2 - text_width // 2
-        text_y = stage_img_height // 2 - text_height // 2
+        # Align text to appear at the left edge after rotation
+        # When rotated -90 degrees, the top edge of horizontal text becomes the left edge of vertical text
+        # So we position text at the top of the horizontal image
+        text_x = stage_img_width // 2 - text_width // 2  # Center horizontally before rotation
+        text_y = padding  # Position at top edge (with padding) - this becomes left edge after rotation
         
         # Draw stroke by drawing text multiple times with slight offsets (thicker effect)
         for adj in range(-2, 3):
@@ -1252,17 +1253,17 @@ class HTMLSlideGenerator:
         # Then draw the main text on top
         stage_draw.text((text_x, text_y), stage_text, fill=stage_color, font=sidebar_bold_font)
         
-        # Rotate the image 180 degrees (upside down)
-        stage_img = stage_img.rotate(180, expand=True)
+        # Rotate the image 90 degrees counter-clockwise (same as SLAUSON&CO.)
+        stage_img = stage_img.rotate(-90, expand=True)
         
         # Get final dimensions after rotation
         final_width, final_height = stage_img.size
         
-        # Paste at the top of the orange sidebar
-        # After 180 degree rotation, the text is upside down
+        # Paste at the right side of the orange sidebar (moved significantly to the right)
+        # After rotation, the text runs vertically, positioned at the right edge of sidebar
         sidebar_width = 200  # Orange sidebar width
-        paste_x = sidebar_width // 2 - final_width // 2  # Center horizontally in sidebar
-        paste_y = max(20, stage_top_y)  # Position at top of sidebar
+        paste_x = sidebar_width - final_width + 40  # Position at right side of sidebar with minimal padding (moved further right)
+        paste_y = max(20, stage_top_y)  # Ensure it doesn't go outside top edge
         
         slide.paste(stage_img, (paste_x, paste_y), stage_img)
         
