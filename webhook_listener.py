@@ -457,7 +457,36 @@ def handle_onboarding():
                     results["errors"].append(f"Slide creation: {str(e)}")
                     raise
                 
-                # Step 5: Upload PDF to Google Drive
+                # Step 5: Check if slides already exist for this Notion page
+                notion_page_id = notion_metadata.get("page_id")
+                existing_slides = False
+                existing_google_drive_link = None
+                existing_canva_design_id = None
+                
+                if notion_page_id and Config.NOTION_API_KEY:
+                    try:
+                        notion = NotionIntegration()
+                        existing_data = notion.get_company_by_page_id(notion_page_id)
+                        if existing_data:
+                            # Check if this page already has slides
+                            existing_google_drive_link = existing_data.get("google_drive_link")
+                            existing_canva_design_id = existing_data.get("canva_design_id")
+                            
+                            if existing_google_drive_link or existing_canva_design_id:
+                                existing_slides = True
+                                print(f"📋 Found existing slides for this Notion page:")
+                                if existing_google_drive_link:
+                                    print(f"   Google Drive: {existing_google_drive_link}")
+                                if existing_canva_design_id:
+                                    print(f"   Canva Design ID: {existing_canva_design_id}")
+                                print("   Will update/replace existing slides...")
+                            else:
+                                print("📄 No existing slides found, creating new ones...")
+                    except Exception as e:
+                        print(f"⚠️  Could not check for existing slides: {e}")
+                        # Continue with creating new slides
+                
+                # Step 6: Upload PDF to Google Drive
                 print("Uploading PDF to Google Drive...")
                 # Define filename before both uploads so it's available for both
                 filename = f"{company_data.get('name', 'slide').replace(' ', '_')}_slide.pdf"
@@ -470,23 +499,53 @@ def handle_onboarding():
                         folder_id=Config.GOOGLE_DRIVE_FOLDER_ID
                     )
                     results["google_drive_link"] = google_drive_link
-                    print(f"✓ Uploaded to Google Drive: {google_drive_link}")
+                    if existing_slides:
+                        print(f"✓ Updated Google Drive slide: {google_drive_link}")
+                    else:
+                        print(f"✓ Uploaded to Google Drive: {google_drive_link}")
                 except Exception as e:
                     print(f"Warning: Google Drive upload failed: {e}")
                     results["errors"].append(f"Google Drive: {str(e)}")
                 
-                # Step 6: Upload PDF to Canva as asset (required)
+                # Step 7: Upload PDF to Canva as asset (required)
                 canva_asset_id = None
+                canva_design_id = None
+                canva_design_url = None
                 try:
                     has_canva_creds = (
                         (Config.CANVA_API_KEY or (Config.CANVA_CLIENT_ID and Config.CANVA_CLIENT_SECRET))
+                        and Config.CANVA_TEMPLATE_ID
                     )
                     if has_canva_creds:
+                        if existing_slides and existing_canva_design_id:
+                            print(f"📋 Existing Canva design found: {existing_canva_design_id}")
+                            print("   Note: Canva designs are immutable, so a new design will be created")
+                        
                         print("Uploading slide PDF to Canva as asset...")
                         canva = CanvaIntegration()
                         canva_asset_id = canva.upload_pdf_asset(slide_pdf_bytes, filename)
                         results["canva_asset_id"] = canva_asset_id
-                        print(f"✓ Uploaded PDF to Canva assets: {canva_asset_id}")
+                        
+                        # Check if it's a job ID (import job) or asset ID
+                        import re
+                        is_job_id = re.match(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', canva_asset_id, re.IGNORECASE)
+                        if is_job_id:
+                            # Wait for import completion and get design ID
+                            print("Waiting for Canva import to complete...")
+                            status_info = canva.wait_for_import_completion(canva_asset_id, max_wait_seconds=60, poll_interval=2)
+                            if status_info.get('status') == 'success':
+                                canva_design_id = status_info.get('design_id')
+                                canva_design_url = status_info.get('design_url')
+                                results["canva_design_id"] = canva_design_id
+                                results["canva_design_url"] = canva_design_url
+                                if existing_slides:
+                                    print(f"✓ Created new Canva design (replacing old): {canva_design_id}")
+                                else:
+                                    print(f"✓ Created Canva design: {canva_design_id}")
+                            else:
+                                print(f"⚠️  Canva import job did not complete successfully: {status_info.get('status')}")
+                        else:
+                            print(f"✓ Uploaded PDF to Canva assets: {canva_asset_id}")
                     else:
                         print("Warning: Canva credentials not configured, skipping PDF upload")
                         results["errors"].append("Canva PDF upload: Credentials not configured")
@@ -495,7 +554,7 @@ def handle_onboarding():
                     results["errors"].append(f"Canva PDF upload: {str(e)}")
                     # Don't fail the entire workflow, but log the error
                 
-                # Step 7: DocSend (optional - uses Google Drive sync)
+                # Step 8: DocSend (optional - uses Google Drive sync)
                 print("DocSend integration via Google Drive...")
                 docsend_link = None
                 
@@ -525,19 +584,23 @@ def handle_onboarding():
                     # You can manually get the DocSend link from the Google Drive file
                     # Or set up DocSend API later to get the link programmatically
                 
-                # Step 7: Update Notion record
+                # Step 9: Update Notion record
                 print("Updating Notion record...")
-                notion_page_id = notion_metadata.get("page_id")
                 if notion_page_id and Config.NOTION_API_KEY:
                     try:
                         notion = NotionIntegration()
                         notion.update_company_record(
-                            notion_page_id,
+                            page_id=notion_page_id,
                             google_drive_link=google_drive_link,
                             docsend_link=docsend_link,
+                            canva_design_id=canva_design_id,
+                            canva_design_url=canva_design_url,
                             status="completed"
                         )
-                        print("✓ Notion record updated")
+                        if existing_slides:
+                            print("✓ Notion record updated (replaced existing slides)")
+                        else:
+                            print("✓ Notion record updated (new slides created)")
                     except Exception as e:
                         print(f"Warning: Notion update failed: {e}")
                         results["errors"].append(f"Notion update: {str(e)}")

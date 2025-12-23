@@ -211,6 +211,8 @@ class NotionIntegration:
         page_id: str,
         google_drive_link: Optional[str] = None,
         docsend_link: Optional[str] = None,
+        canva_design_id: Optional[str] = None,
+        canva_design_url: Optional[str] = None,
         status: str = "completed"
     ) -> bool:
         """
@@ -243,6 +245,24 @@ class NotionIntegration:
             for prop_name in ["DocSend Link", "DocSend", "Presentation Link"]:
                 try:
                     properties[prop_name] = {"url": docsend_link}
+                    break
+                except:
+                    pass
+        
+        # Update Canva Design ID if provided
+        if canva_design_id:
+            for prop_name in ["Canva Design ID", "Design ID", "Canva ID"]:
+                try:
+                    properties[prop_name] = {"rich_text": [{"text": {"content": canva_design_id}}]}
+                    break
+                except:
+                    pass
+        
+        # Update Canva Design URL if provided
+        if canva_design_url:
+            for prop_name in ["Canva Design URL", "Design URL", "Canva URL"]:
+                try:
+                    properties[prop_name] = {"url": canva_design_url}
                     break
                 except:
                     pass
@@ -287,17 +307,48 @@ class NotionIntegration:
     
     def get_company_by_page_id(self, page_id: str) -> Optional[Dict]:
         """
-        Get company record by page ID.
+        Get company record by page ID and extract relevant data.
         
         Args:
             page_id: Notion page ID
             
         Returns:
-            Company page data or None if not found
+            Dictionary with company data including google_drive_link and canva_design_id, or None if not found
         """
         try:
             response = self.client.pages.retrieve(page_id=page_id)
-            return response
+            properties = response.get("properties", {})
+            
+            # Extract relevant fields
+            company_data = {}
+            
+            # Extract Google Drive link
+            for prop_name in ["Google Drive Link", "Drive Link", "PDF Link", "Slide Link"]:
+                if prop_name in properties:
+                    prop = properties[prop_name]
+                    if prop.get("type") == "url":
+                        company_data["google_drive_link"] = prop.get("url")
+                        break
+            
+            # Extract Canva Design ID
+            for prop_name in ["Canva Design ID", "Design ID", "Canva ID"]:
+                if prop_name in properties:
+                    prop = properties[prop_name]
+                    if prop.get("type") == "rich_text":
+                        rich_text = prop.get("rich_text", [])
+                        if rich_text:
+                            company_data["canva_design_id"] = " ".join([text.get("plain_text", "") for text in rich_text])
+                            break
+            
+            # Extract Canva Design URL
+            for prop_name in ["Canva Design URL", "Design URL", "Canva URL"]:
+                if prop_name in properties:
+                    prop = properties[prop_name]
+                    if prop.get("type") == "url":
+                        company_data["canva_design_url"] = prop.get("url")
+                        break
+            
+            return company_data if company_data else None
         except Exception as e:
             print(f"Error retrieving Notion page: {e}")
             return None

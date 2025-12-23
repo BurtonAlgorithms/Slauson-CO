@@ -13,6 +13,15 @@ from collections import Counter
 import numpy as np
 from functools import lru_cache
 
+# PPTX support for editable Canva designs
+try:
+    from pptx import Presentation
+    from pptx.util import Inches, Pt
+    from pptx.dml.color import RGBColor
+    PPTX_AVAILABLE = True
+except ImportError:
+    PPTX_AVAILABLE = False
+
 # Fix for reportlab compatibility
 try:
     hashlib.md5(b'test', usedforsecurity=False)
@@ -380,20 +389,106 @@ class HTMLSlideGenerator:
             return None
     
     def _fallback_latlon(self, city: str):
-        """Fallback lat/lon for common cities when geopy isn't available."""
-        key = city.lower().split(',')[0].strip()
+        """
+        Fallback lat/lon for common cities and all US state capitals when geopy isn't available.
+        Uses real coordinates (no nudges) except for LA which is intentionally shifted.
+        Note: AK/HI coordinates will clamp to contiguous US bounds unless handled specially.
+        """
+        # Parse city name - handle both "City, State" and "City State" formats
+        parts = city.lower().split(',')
+        city_part = parts[0].strip()
+        state_part = parts[1].strip() if len(parts) > 1 else ""
         
-        # Add/adjust as needed
         LATLON = {
-            "los angeles": (34.0522, -118.2437),
+            # Keep these as-is per your request (even though LA is intentionally shifted)
+            "los angeles": (34.0522, -118.5),  # intentionally shifted
+            "san francisco": (37.7749, -122.4194),
+            "miami": (25.7617, -80.1918),
             "new york": (40.7128, -74.0060),
             "new york city": (40.7128, -74.0060),
-            "miami": (25.7617, -80.1918),
-            "san francisco": (37.7749, -122.4194),
+            
+            # Major cities
             "seattle": (47.6062, -122.3321),
             "boston": (42.3601, -71.0589),
             "chicago": (41.8781, -87.6298),
+            "new orleans": (29.9511, -90.0715),
+            
+            # US State Capitals (standard coords)
+            "montgomery": (32.3668, -86.3000),        # AL
+            "juneau": (58.3019, -134.4197),           # AK  (needs special handling on contiguous map)
+            "phoenix": (33.4484, -112.0740),          # AZ
+            "little rock": (34.7465, -92.2896),       # AR
+            "sacramento": (38.5816, -121.4944),       # CA
+            "denver": (39.7392, -104.9903),           # CO
+            "hartford": (41.7658, -72.6734),          # CT
+            "dover": (39.1582, -75.5244),             # DE
+            "tallahassee": (30.4383, -84.2807),       # FL
+            "atlanta": (33.7490, -84.3880),           # GA
+            "honolulu": (21.3069, -157.8583),         # HI  (needs special handling on contiguous map)
+            "boise": (43.6150, -116.2023),            # ID
+            "springfield": (39.7817, -89.6501),       # IL (capital)
+            "indianapolis": (39.7684, -86.1581),      # IN
+            "des moines": (41.5868, -93.6250),        # IA
+            "topeka": (39.0473, -95.6752),            # KS
+            "frankfort": (38.2009, -84.8733),         # KY
+            "baton rouge": (30.4515, -91.1871),       # LA
+            "augusta": (44.3106, -69.7795),           # ME (capital)  <-- note ambiguity with Augusta, GA
+            "annapolis": (38.9784, -76.4922),         # MD
+            "lansing": (42.7325, -84.5555),           # MI
+            "saint paul": (44.9537, -93.0900),        # MN
+            "st. paul": (44.9537, -93.0900),          # MN alias
+            "jackson": (32.2988, -90.1848),           # MS
+            "jefferson city": (38.5767, -92.1735),    # MO
+            "helena": (46.5891, -112.0391),           # MT
+            "lincoln": (40.8136, -96.7026),           # NE
+            "carson city": (39.1638, -119.7674),      # NV
+            "concord": (43.2081, -71.5376),           # NH
+            "trenton": (40.2171, -74.7429),           # NJ
+            "santa fe": (35.6870, -105.9378),         # NM
+            "albany": (42.6526, -73.7562),            # NY (capital)
+            "raleigh": (35.7796, -78.6382),           # NC
+            "bismarck": (46.8083, -100.7837),         # ND
+            "columbus": (39.9612, -82.9988),          # OH
+            "oklahoma city": (35.4676, -97.5164),     # OK
+            "salem": (44.9429, -123.0351),            # OR
+            "harrisburg": (40.2732, -76.8867),        # PA
+            "providence": (41.8240, -71.4128),        # RI
+            "columbia": (34.0007, -81.0348),          # SC (capital)
+            "pierre": (44.3683, -100.3510),           # SD
+            "nashville": (36.1627, -86.7816),         # TN
+            "austin": (30.2672, -97.7431),            # TX
+            "salt lake city": (40.7608, -111.8910),   # UT
+            "montpelier": (44.2601, -72.5754),        # VT
+            "richmond": (37.5407, -77.4360),          # VA
+            "olympia": (47.0379, -122.9007),          # WA
+            "charleston": (38.3498, -81.6326),        # WV (capital) -- ambiguous with Charleston, SC city
+            "madison": (43.0748, -89.3848),           # WI
+            "cheyenne": (41.1400, -104.8202),         # WY
+            
+            # Optional disambiguation aliases (HIGHLY recommended)
+            "augusta me": (44.3106, -69.7795),
+            "augusta ga": (33.4735, -82.0105),
+            "charleston wv": (38.3498, -81.6326),
+            "charleston sc": (32.7765, -79.9311),
         }
+        
+        # Try disambiguation key first (e.g., "augusta me", "charleston wv")
+        if state_part:
+            # Map common state abbreviations to full state names for disambiguation
+            state_map = {
+                "me": "me", "maine": "me",
+                "ga": "ga", "georgia": "ga",
+                "wv": "wv", "west virginia": "wv",
+                "sc": "sc", "south carolina": "sc"
+            }
+            state_key = state_map.get(state_part, "")
+            if state_key:
+                disambiguation_key = f"{city_part} {state_key}"
+                if disambiguation_key in LATLON:
+                    return LATLON[disambiguation_key]
+        
+        # Fall back to city name only
+        key = city_part
         return LATLON.get(key)
     
     
@@ -520,7 +615,7 @@ class HTMLSlideGenerator:
         # Default to center of US
         return (0.50, 0.50)
 
-    def create_slide(self, company_data: Dict, headshot_path: str, logo_path: str, map_path: Optional[str] = None) -> bytes:
+    def create_slide(self, company_data: Dict, headshot_path: str, logo_path: str, map_path: Optional[str] = None, output_format: str = "pdf") -> bytes:
         # Check if template exists, try default locations if not found
         if not self.template_path or not os.path.exists(self.template_path):
             # Get the directory where this script is located
@@ -711,14 +806,22 @@ class HTMLSlideGenerator:
             # map_area_x, map_area_y, map_width, map_height already set above
             
             # Get lat/lon for city
-            latlon = self._geocode_city(location) or self._fallback_latlon(location)
-            if not latlon:
-                latlon = (39.5, -98.35)  # fallback center US
+            # Special case: Override Los Angeles to use adjusted coordinates (moved left)
+            location_lower = location.lower().strip()
+            if "los angeles" in location_lower or location_lower == "la":
+                latlon = (34.0522, -118.5)  # Adjusted longitude to move pin left
+            else:
+                latlon = self._geocode_city(location) or self._fallback_latlon(location)
+                if not latlon:
+                    latlon = (39.5, -98.35)  # fallback center US
             
             # Debug prints to confirm bbox detection
             print(f"   DEBUG map bbox: ({map_area_x}, {map_area_y}, {map_width}, {map_height})")
             print(f"   DEBUG location: {location}, latlon: {latlon}")
             
+            # Note: AK (Juneau) and HI (Honolulu) coordinates will be clamped to contiguous US bounds
+            # in _latlon_to_map_xy, so they won't appear accurately on the map. Consider skipping
+            # pin placement for these states or implementing inset logic if needed.
             lat, lon = latlon
             pin_x, pin_y = self._latlon_to_map_xy(lat, lon, map_area_x, map_area_y, map_width, map_height)
             # REMOVED: pin_y -= 6  # Remove aesthetic offset as it causes inaccuracy
@@ -961,17 +1064,13 @@ class HTMLSlideGenerator:
                     headshot_img = headshot_img.convert('RGBA')
             
             # Position headshots below the map, moved to the left
-            # Map area: right side, upper-middle
-            map_area_x = width - 450  # Right side of map
-            map_area_y = 280
-            map_width = 380
-            map_height = 260
+            # Use map_area_x, map_area_y, map_width, map_height already detected above
             
-            # Headshot moved to the left, increased size, and raised
-            headshot_area_width = 550  # Increased size (was 450)
-            headshot_area_height = 500  # Increased size (was 400)
-            # Move left by offsetting from map center
-            headshot_area_x = map_area_x + (map_width - headshot_area_width) // 2 - 150  # Moved more to the left (was -100, now -150)
+            # Headshot - substantially increased size
+            headshot_area_width = int(550 * 2.2)   # 1210 (120% bigger than original)
+            headshot_area_height = int(500 * 2.2)  # 1100 (120% bigger than original)
+            # Shift to the right by reducing the negative offset
+            headshot_area_x = map_area_x + (map_width - headshot_area_width) // 2 - 50  # Shifted right (was -150, now -50)
             headshot_area_y = map_area_y + map_height - 50  # Raised (was +20, now -50 to move up)
             
             # Don't erase background - keep it transparent (no black box)
@@ -1091,6 +1190,18 @@ class HTMLSlideGenerator:
         slide_rgb = Image.new('RGB', slide.size, (42, 42, 42))
         slide_rgb.paste(slide, mask=slide.split()[3] if slide.mode == 'RGBA' else None)
         
+        # Return based on output format
+        if output_format.lower() == "pptx":
+            return self._create_pptx_from_slide(
+                slide, company_data, headshot_path, logo_path, map_path,
+                map_area_x, map_area_y, map_width, map_height
+            )
+        
+        # Default: Convert to PDF (flattened, not editable)
+        # Convert to RGB for PDF
+        slide_rgb = Image.new('RGB', slide.size, (42, 42, 42))
+        slide_rgb.paste(slide, mask=slide.split()[3] if slide.mode == 'RGBA' else None)
+        
         # Convert to PDF
         img_bytes = io.BytesIO()
         slide_rgb.save(img_bytes, format='PNG')
@@ -1098,3 +1209,335 @@ class HTMLSlideGenerator:
         
         pdf_bytes = img2pdf.convert(img_bytes.getvalue())
         return pdf_bytes
+    
+    def _create_pptx_from_slide(
+        self, 
+        template_slide: Image.Image,
+        company_data: Dict,
+        headshot_path: str,
+        logo_path: str,
+        map_path: Optional[str],
+        map_area_x: int,
+        map_area_y: int,
+        map_width: int,
+        map_height: int
+    ) -> bytes:
+        """
+        Create an editable PPTX file with separate elements for Canva import.
+        This allows headshot, logo, map, and text to be editable in Canva.
+        
+        Args:
+            template_slide: PIL Image of the template background
+            company_data: Company information
+            headshot_path: Path to headshot image
+            logo_path: Path to logo image
+            map_path: Path to map image (optional)
+            map_area_x, map_area_y, map_width, map_height: Map position/size
+            
+        Returns:
+            PPTX file bytes
+        """
+        if not PPTX_AVAILABLE:
+            raise ImportError("python-pptx is required for PPTX generation. Install with: pip install python-pptx")
+        
+        # Slide dimensions: 1920x1080 pixels = 20x11.25 inches at 96 DPI
+        # Standard widescreen: 13.333" x 7.5" (16:9)
+        prs = Presentation()
+        prs.slide_width = Inches(13.333)  # 1920px / 144 DPI
+        prs.slide_height = Inches(7.5)   # 1080px / 144 DPI
+        
+        # Create blank slide
+        slide_layout = prs.slide_layouts[6]  # Blank layout
+        slide_pptx = prs.slides.add_slide(slide_layout)
+        
+        # CRITICAL: Don't add full-slide background image - it causes Canva to flatten everything into one image
+        # Instead, we'll add ONLY the editable elements (logo, headshot, text, map) on a blank slide
+        # The user can add their own background in Canva, or we can add it as a separate editable element later
+        # For now, just add a simple colored background using shapes (editable)
+        from pptx.enum.shapes import MSO_SHAPE
+        
+        # 1) Orange sidebar (left side, editable shape)
+        sidebar_width_inch = Inches(200 / 96.0)  # 200px converted to inches
+        sidebar = slide_pptx.shapes.add_shape(
+            MSO_SHAPE.RECTANGLE,
+            Inches(0),
+            Inches(0),
+            sidebar_width_inch,
+            prs.slide_height
+        )
+        sidebar.fill.solid()
+        sidebar.fill.fore_color.rgb = RGBColor(242, 140, 40)  # Orange #F28C28
+        sidebar.line.fill.background()  # No border
+        
+        # 2) Dark grey main area (right side, editable shape)
+        main_area = slide_pptx.shapes.add_shape(
+            MSO_SHAPE.RECTANGLE,
+            sidebar_width_inch,
+            Inches(0),
+            prs.slide_width - sidebar_width_inch,
+            prs.slide_height
+        )
+        main_area.fill.solid()
+        main_area.fill.fore_color.rgb = RGBColor(42, 42, 42)  # Dark grey
+        main_area.line.fill.background()  # No border
+        
+        # Get actual positions from template (convert pixels to inches at 96 DPI)
+        width, height = template_slide.size
+        px_to_inch = 1.0 / 96.0  # 96 DPI standard
+        
+        # Add "SLAUSON&CO." text in sidebar (bottom, editable text)
+        slauson_text = "SLAUSON&CO."
+        slauson_y_px = height - 200  # Bottom of sidebar
+        slauson_x_px = 10  # Left side of sidebar
+        
+        slauson_textbox = slide_pptx.shapes.add_textbox(
+            Inches(slauson_x_px * px_to_inch),
+            Inches(slauson_y_px * px_to_inch),
+            Inches(180 * px_to_inch),  # Width for sidebar
+            Inches(1.5)
+        )
+        slauson_tf = slauson_textbox.text_frame
+        slauson_tf.word_wrap = False
+        slauson_p = slauson_tf.paragraphs[0]
+        slauson_run = slauson_p.add_run()
+        slauson_run.text = slauson_text
+        slauson_run.font.size = Pt(28)
+        slauson_run.font.bold = True
+        slauson_run.font.color.rgb = RGBColor(0, 0, 0)  # Black
+        
+        # 2) Logo (top right, editable) - from PIL code: logo_x, logo_y = width - 170, 10
+        if logo_path and os.path.exists(logo_path):
+            logo_img = Image.open(logo_path).convert('RGBA')
+            # Make circular (same as PIL code)
+            logo_size_px = 130
+            logo_img.thumbnail((logo_size_px - 20, logo_size_px - 20), Image.Resampling.LANCZOS)
+            
+            # Create circular mask
+            circle_mask = Image.new('L', (logo_size_px, logo_size_px), 0)
+            circle_draw = ImageDraw.Draw(circle_mask)
+            circle_draw.ellipse([(0, 0), (logo_size_px, logo_size_px)], fill=255)
+            
+            # Apply mask
+            logo_w, logo_h = logo_img.size
+            min_dim = min(logo_w, logo_h)
+            logo_img = logo_img.crop(((logo_w - min_dim) // 2, (logo_h - min_dim) // 2, 
+                                     (logo_w + min_dim) // 2, (logo_h + min_dim) // 2))
+            logo_img = logo_img.resize((logo_size_px - 20, logo_size_px - 20), Image.Resampling.LANCZOS)
+            logo_masked = Image.new('RGBA', (logo_size_px, logo_size_px), (0, 0, 0, 0))
+            logo_masked.paste(logo_img, (10, 10), logo_img)
+            logo_masked.putalpha(circle_mask)
+            
+            logo_bytes = io.BytesIO()
+            logo_masked.save(logo_bytes, format='PNG')
+            logo_bytes.seek(0)
+            
+            # Position: from PIL code - logo_x, logo_y = width - 170, 10
+            logo_x_inch = (width - 170) * px_to_inch
+            logo_y_inch = 10 * px_to_inch
+            logo_size_inch = logo_size_px * px_to_inch
+            
+            slide_pptx.shapes.add_picture(
+                logo_bytes,
+                Inches(logo_x_inch),
+                Inches(logo_y_inch),
+                width=Inches(logo_size_inch)
+            )
+        
+        # 3) Company name (editable text) - from PIL code: name_x, name_y = founders_text_x - 50, 120
+        company_name = company_data.get("name", "").upper()
+        if company_name:
+            # Position from PIL: name_x = founders_text_x - 50, name_y = 120
+            # founders_text_x = 320 from PIL code
+            name_x_px = 320 - 50  # 270
+            name_y_px = 120
+            
+            # Calculate font size (same logic as PIL)
+            base_font_size = 180
+            name_font_size = base_font_size
+            # Check for overlap with map
+            max_allowed_width = map_area_x - name_x_px - 50
+            # Estimate text width (rough calculation)
+            estimated_width = len(company_name) * (name_font_size * 0.6)  # Rough estimate
+            if estimated_width > max_allowed_width:
+                name_font_size = int((max_allowed_width / estimated_width) * base_font_size)
+                name_font_size = max(100, name_font_size)
+            
+            textbox = slide_pptx.shapes.add_textbox(
+                Inches(name_x_px * px_to_inch),
+                Inches(name_y_px * px_to_inch),
+                Inches((map_area_x - name_x_px - 50) * px_to_inch),
+                Inches(2.0)  # Height for large text
+            )
+            tf = textbox.text_frame
+            tf.word_wrap = True
+            p = tf.paragraphs[0]
+            run = p.add_run()
+            run.text = company_name
+            run.font.size = Pt(name_font_size)
+            run.font.bold = True
+            run.font.color.rgb = RGBColor(255, 140, 0)  # Orange color
+        
+        # 4) Investment stage (editable text) - positioned in sidebar
+        investment_stage = company_data.get("investment_stage", "")
+        if not investment_stage:
+            round_val = company_data.get("investment_round", "PRE-SEED")
+            quarter_val = company_data.get("quarter", "Q2")
+            year_val = company_data.get("year", "2024")
+            investment_stage = f"{round_val} {quarter_val} {year_val}"
+        
+        if investment_stage:
+            # Position: right side of sidebar (from PIL: sidebar_width - final_width - 20, paste_y = max(20, stage_top_y))
+            sidebar_width_px = 200
+            stage_top_y_px = 80
+            # Estimate text width
+            text_width_px = 150  # Approximate
+            paste_x_px = sidebar_width_px - text_width_px - 20
+            paste_y_px = max(20, stage_top_y_px)
+            
+            textbox = slide_pptx.shapes.add_textbox(
+                Inches(paste_x_px * px_to_inch),
+                Inches(paste_y_px * px_to_inch),
+                Inches(text_width_px * px_to_inch),
+                Inches(3.0)
+            )
+            tf = textbox.text_frame
+            tf.word_wrap = False
+            p = tf.paragraphs[0]
+            run = p.add_run()
+            run.text = investment_stage
+            # Dynamic font size (same as PIL)
+            font_size = 40
+            if len(investment_stage) > 15:
+                font_size = 34
+            if len(investment_stage) > 20:
+                font_size = 30
+            if len(investment_stage) > 25:
+                font_size = 26
+            run.font.size = Pt(font_size)
+            run.font.bold = True
+            run.font.color.rgb = RGBColor(0, 0, 0)  # Black
+        
+        # 5) Headshot (below map, editable)
+        if headshot_path and os.path.exists(headshot_path):
+            headshot_bytes = io.BytesIO()
+            headshot_img = Image.open(headshot_path).convert('RGBA')
+            # Process headshot (background removal already done in PIL code)
+            headshot_img.save(headshot_bytes, format='PNG')
+            headshot_bytes.seek(0)
+            
+            # Position from PIL: headshot_area_width = 550 * 2.2 = 1210, headshot_area_height = 500 * 2.2 = 1100
+            # headshot_area_x = map_area_x + (map_width - headshot_area_width) // 2 - 50
+            # headshot_area_y = map_area_y + map_height - 50
+            headshot_area_width_px = int(550 * 2.2)
+            headshot_area_height_px = int(500 * 2.2)
+            headshot_area_x_px = map_area_x + (map_width - headshot_area_width_px) // 2 - 50
+            headshot_area_y_px = map_area_y + map_height - 50
+            
+            slide_pptx.shapes.add_picture(
+                headshot_bytes,
+                Inches(headshot_area_x_px * px_to_inch),
+                Inches(headshot_area_y_px * px_to_inch),
+                width=Inches(headshot_area_width_px * px_to_inch),
+                height=Inches(headshot_area_height_px * px_to_inch)
+            )
+        
+        # 6) Founders text (editable) - from PIL code: founders_text_x = 320, founders_text_y = 415
+        founders_text = company_data.get("founders", "")
+        if founders_text:
+            if isinstance(founders_text, list):
+                founders_text = '\n'.join(founders_text)
+            elif isinstance(founders_text, str) and ',' in founders_text:
+                founders_text = '\n'.join([f.strip() for f in founders_text.split(',')])
+            
+            # Position from PIL: founders_text_x = 320, founders_text_y = 415
+            founders_text_x_px = 320
+            founders_text_y_px = 415
+            
+            textbox = slide_pptx.shapes.add_textbox(
+                Inches(founders_text_x_px * px_to_inch),
+                Inches(founders_text_y_px * px_to_inch),
+                Inches(3.0),
+                Inches(2.0)
+            )
+            tf = textbox.text_frame
+            tf.word_wrap = True
+            p = tf.paragraphs[0]
+            run = p.add_run()
+            run.text = founders_text
+            run.font.size = Pt(24)
+            run.font.color.rgb = RGBColor(255, 255, 255)  # White
+        
+        # 7) Co-investors text (editable) - from PIL code: investors_text_x = 650, investors_text_y = 415
+        co_investors_text = company_data.get("co_investors", "")
+        if co_investors_text:
+            if isinstance(co_investors_text, list):
+                co_investors_text = '\n'.join(co_investors_text)
+            elif isinstance(co_investors_text, str) and ',' in co_investors_text:
+                co_investors_text = '\n'.join([f.strip() for f in co_investors_text.split(',')])
+            
+            # Position from PIL: investors_text_x = 650, investors_text_y = 415
+            investors_text_x_px = 650
+            investors_text_y_px = 415
+            
+            textbox = slide_pptx.shapes.add_textbox(
+                Inches(investors_text_x_px * px_to_inch),
+                Inches(investors_text_y_px * px_to_inch),
+                Inches(3.0),
+                Inches(2.0)
+            )
+            tf = textbox.text_frame
+            tf.word_wrap = True
+            p = tf.paragraphs[0]
+            run = p.add_run()
+            run.text = co_investors_text
+            run.font.size = Pt(24)
+            run.font.color.rgb = RGBColor(255, 255, 255)  # White
+        
+        # 8) Background text (editable) - from PIL code: bg_text_x = 320, bg_text_y = 650
+        background_text = company_data.get("background", company_data.get("description", ""))
+        if background_text:
+            # Position from PIL: bg_text_x = 320, bg_text_y = 650, bg_text_width = 700
+            bg_text_x_px = 320
+            bg_text_y_px = 650
+            bg_text_width_px = 700
+            
+            textbox = slide_pptx.shapes.add_textbox(
+                Inches(bg_text_x_px * px_to_inch),
+                Inches(bg_text_y_px * px_to_inch),
+                Inches(bg_text_width_px * px_to_inch),
+                Inches(2.5)
+            )
+            tf = textbox.text_frame
+            tf.word_wrap = True
+            p = tf.paragraphs[0]
+            run = p.add_run()
+            run.text = background_text
+            run.font.size = Pt(32)
+            run.font.color.rgb = RGBColor(255, 255, 255)  # White
+        
+        # 9) Map (if provided, editable) - positioned at detected map area
+        if map_path and os.path.exists(map_path):
+            map_bytes = io.BytesIO()
+            map_img = Image.open(map_path).convert('RGBA')
+            map_img.save(map_bytes, format='PNG')
+            map_bytes.seek(0)
+            
+            # Position: top right area (from detected map area)
+            map_x = map_area_x / 96.0  # Convert pixels to inches
+            map_y = map_area_y / 96.0
+            map_w = map_width / 96.0
+            map_h = map_height / 96.0
+            
+            slide_pptx.shapes.add_picture(
+                map_bytes,
+                Inches(map_x),
+                Inches(map_y),
+                width=Inches(map_w),
+                height=Inches(map_h)
+            )
+        
+        # Save to bytes
+        pptx_bytes = io.BytesIO()
+        prs.save(pptx_bytes)
+        pptx_bytes.seek(0)
+        return pptx_bytes.getvalue()
