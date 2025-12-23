@@ -1015,11 +1015,68 @@ class HTMLSlideGenerator:
         try:
             from image_processor import ImageProcessor
             
-            # Remove background from headshot to make it transparent
+            # First, validate that the headshot file exists and is a valid image
+            if not headshot_path or not os.path.exists(headshot_path):
+                raise ValueError(f"Headshot file not found: {headshot_path}")
+            
+            # Try to open the original image first to validate it
             try:
-                print(f"   Removing background from headshot...")
-                headshot_no_bg_bytes = ImageProcessor.remove_background(headshot_path)
-                headshot_img = Image.open(io.BytesIO(headshot_no_bg_bytes)).convert('RGBA')
+                test_img = Image.open(headshot_path)
+                test_img.verify()  # Verify it's a valid image
+                test_img.close()
+            except Exception as e:
+                print(f"Warning: Headshot file is not a valid image: {e}")
+                raise ValueError(f"Invalid headshot image: {e}")
+            
+            # Remove background from headshot to make it transparent
+            # Skip API-based removal if REMOVEBG_API_KEY is not set (to avoid timeouts)
+            use_api_removal = False
+            try:
+                from config import Config
+                if hasattr(Config, 'REMOVEBG_API_KEY') and Config.REMOVEBG_API_KEY and Config.REMOVEBG_API_KEY.strip():
+                    use_api_removal = True
+            except:
+                pass
+            
+            if not use_api_removal:
+                print(f"   REMOVEBG_API_KEY not set, using manual background removal...")
+                # Skip API call and go straight to manual removal
+                headshot_img = Image.open(headshot_path).convert('RGBA')
+                headshot_img = self._remove_background_manual(headshot_img)
+            else:
+                try:
+                    print(f"   Removing background from headshot...")
+                    # Use requests timeout to prevent hanging
+                    headshot_no_bg_bytes = ImageProcessor.remove_background(headshot_path)
+                    
+                    # Validate the returned bytes before trying to open them
+                    if not headshot_no_bg_bytes or len(headshot_no_bg_bytes) == 0:
+                        raise ValueError("Background removal returned empty bytes")
+                    
+                    # Check if it looks like image data (starts with image magic bytes)
+                    image_magic_bytes = [
+                        b'\x89PNG',  # PNG
+                        b'\xff\xd8\xff',  # JPEG
+                        b'GIF8',  # GIF
+                        b'RIFF',  # WebP
+                    ]
+                    is_image = any(headshot_no_bg_bytes.startswith(magic) for magic in image_magic_bytes)
+                    
+                    if not is_image:
+                        # Might be valid but check if it's HTML error page or something
+                        if b'<html' in headshot_no_bg_bytes[:1000].lower() or b'error' in headshot_no_bg_bytes[:1000].lower():
+                            raise ValueError("Background removal returned HTML error page instead of image")
+                        # If it doesn't match magic bytes but isn't HTML, still try to open it
+                        print(f"   Warning: Returned bytes don't match standard image formats, attempting to open anyway...")
+                    
+                    # Try to open the image
+                    try:
+                        headshot_img = Image.open(io.BytesIO(headshot_no_bg_bytes))
+                        headshot_img.load()  # Force load to catch decode errors early
+                        headshot_img = headshot_img.convert('RGBA')
+                    except Exception as img_error:
+                        print(f"   Warning: Failed to open background-removed image: {img_error}")
+                        raise ValueError(f"Invalid image data from background removal: {img_error}")
                 
                 # Verify background was actually removed by checking alpha channel
                 # If all pixels are opaque, background removal may have failed
@@ -1038,7 +1095,10 @@ class HTMLSlideGenerator:
                     print(f"   ✓ Background removed successfully ({transparency_ratio*100:.1f}% transparent pixels)")
             except Exception as e:
                 print(f"Warning: Background removal failed: {e}")
+                import traceback
+                traceback.print_exc()
                 # Fallback: use original image and try manual removal
+                print(f"   Falling back to original image with manual background removal...")
                 headshot_img = Image.open(headshot_path).convert('RGBA')
                 headshot_img = self._remove_background_manual(headshot_img)
 

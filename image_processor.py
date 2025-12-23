@@ -47,6 +47,7 @@ class ImageProcessor:
                     files={'image_file': image_file},
                     data={'size': 'auto'},
                     headers={'X-Api-Key': Config.REMOVEBG_API_KEY},
+                    timeout=15  # 15 second timeout to prevent hanging
                 )
             
             if response.status_code == 200:
