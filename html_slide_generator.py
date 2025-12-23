@@ -1062,10 +1062,30 @@ class HTMLSlideGenerator:
                             headshot_img = headshot_img.resize(new_size, Image.Resampling.LANCZOS)
                         
                         # Use rembg to remove background
-                        print(f"   Removing background with rembg...")
-                        output = remove(headshot_img)
-                        headshot_img = output.convert('RGBA')
-                        print(f"   ✓ Background removed successfully with rembg")
+                        # Note: First call may download model (~100MB) which can take time
+                        print(f"   Removing background with rembg (this may take a moment on first use)...")
+                        # Add a timeout wrapper to prevent hanging
+                        import signal
+                        def timeout_handler(signum, frame):
+                            raise TimeoutError("rembg processing timed out")
+                        
+                        # Set 30 second timeout for rembg processing
+                        signal.signal(signal.SIGALRM, timeout_handler)
+                        signal.alarm(30)
+                        
+                        try:
+                            output = remove(headshot_img)
+                            signal.alarm(0)  # Cancel timeout
+                            headshot_img = output.convert('RGBA')
+                            print(f"   ✓ Background removed successfully with rembg")
+                        except TimeoutError:
+                            signal.alarm(0)
+                            print(f"   Warning: rembg processing timed out, using image as-is")
+                            headshot_img = headshot_img.convert('RGBA')
+                        except Exception as rembg_error:
+                            signal.alarm(0)
+                            print(f"   Warning: rembg failed: {rembg_error}, using image as-is")
+                            headshot_img = headshot_img.convert('RGBA')
                     except ImportError:
                         print(f"   Warning: rembg not installed, using image as-is")
                         print(f"   Install with: pip install rembg[new]")
