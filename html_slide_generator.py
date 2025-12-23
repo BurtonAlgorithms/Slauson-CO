@@ -1152,7 +1152,7 @@ class HTMLSlideGenerator:
                 headshot_area_height = int(500 * 2.2)  # 1100 (120% bigger than original)
                 # Shift to the right by reducing the negative offset
                 headshot_area_x = map_area_x + (map_width - headshot_area_width) // 2 - 50  # Shifted right (was -150, now -50)
-                headshot_area_y = map_area_y + map_height - 100  # Raised more to prevent cutoff
+                headshot_area_y = map_area_y + map_height - 10  # Raised more to prevent cutoff
                 
                 # Don't erase background - keep it transparent (no black box)
                 # Just paste the headshot directly
@@ -1237,24 +1237,21 @@ class HTMLSlideGenerator:
         stage_img = Image.new('RGBA', (stage_img_width, stage_img_height), (0, 0, 0, 0))
         stage_draw = ImageDraw.Draw(stage_img)
         
-        # Reverse word order so when rotated it reads from bottom to top
-        # "PRE-SEED Q2 2024" becomes "2024 Q2 PRE-SEED"
-        # After -90 rotation, reading bottom-to-top gives "PRE-SEED Q2 2024"
-        words = stage_text.split()
-        stage_text_reversed = ' '.join(reversed(words))
-        
+        # Draw text normally (no word reversal) at the bottom of the image
+        # When rotated -90 degrees, the bottom becomes the left side
+        # Reading from bottom-to-top means reading from left-to-right on the original horizontal text
         # Center text horizontally before rotation
         text_x = stage_img_width // 2 - text_width // 2
-        text_y = padding  # Position at top edge - becomes left edge after rotation
+        text_y = stage_img_height - text_height - padding  # Position at bottom edge - becomes left edge after rotation
         
         # Draw stroke by drawing text multiple times with slight offsets (thicker effect)
         for adj in range(-2, 3):
             for adj2 in range(-2, 3):
                 if adj != 0 or adj2 != 0:
-                    stage_draw.text((text_x + adj, text_y + adj2), stage_text_reversed, fill=stroke_color, font=sidebar_bold_font)
+                    stage_draw.text((text_x + adj, text_y + adj2), stage_text, fill=stroke_color, font=sidebar_bold_font)
         
         # Then draw the main text on top
-        stage_draw.text((text_x, text_y), stage_text_reversed, fill=stage_color, font=sidebar_bold_font)
+        stage_draw.text((text_x, text_y), stage_text, fill=stage_color, font=sidebar_bold_font)
         
         # Rotate -90 degrees (counter-clockwise) - same as SLAUSON&CO
         stage_img = stage_img.rotate(-90, expand=True)
