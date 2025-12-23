@@ -1244,16 +1244,22 @@ class HTMLSlideGenerator:
         text_x = stage_img_width // 2 - text_width // 2  # Center horizontally before rotation
         text_y = padding  # Position at top edge (with padding) - this becomes left edge after rotation
         
+        # Reverse word order so when rotated it reads from bottom to top
+        # "PRE-SEED Q2 2024" becomes "2024 Q2 PRE-SEED"
+        # After -90 rotation, reading bottom-to-top gives "PRE-SEED Q2 2024"
+        words = stage_text.split()
+        stage_text_reversed = ' '.join(reversed(words))
+        
         # Draw stroke by drawing text multiple times with slight offsets (thicker effect)
         for adj in range(-2, 3):
             for adj2 in range(-2, 3):
                 if adj != 0 or adj2 != 0:
-                    stage_draw.text((text_x + adj, text_y + adj2), stage_text, fill=stroke_color, font=sidebar_bold_font)
+                    stage_draw.text((text_x + adj, text_y + adj2), stage_text_reversed, fill=stroke_color, font=sidebar_bold_font)
         
         # Then draw the main text on top
-        stage_draw.text((text_x, text_y), stage_text, fill=stage_color, font=sidebar_bold_font)
+        stage_draw.text((text_x, text_y), stage_text_reversed, fill=stage_color, font=sidebar_bold_font)
         
-        # Rotate the image 90 degrees counter-clockwise (same as SLAUSON&CO.)
+        # Rotate -90 degrees (counter-clockwise) - same as SLAUSON&CO
         stage_img = stage_img.rotate(-90, expand=True)
         
         # Get final dimensions after rotation
