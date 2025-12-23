@@ -1047,64 +1047,19 @@ class HTMLSlideGenerator:
                     pass
                 
                 if not use_api_removal:
-                    print(f"   REMOVEBG_API_KEY not set, trying rembg (local AI background removal)...")
-                    # Use rembg (U²-Net) for local AI background removal
-                    # This is more reliable than manual removal and doesn't require an API key
-                    try:
-                        from rembg import remove
-                        # Resize image first to reduce memory usage (max 1500px)
-                        headshot_img = Image.open(headshot_path)
-                        max_size = 1500
-                        if max(headshot_img.size) > max_size:
-                            ratio = max_size / max(headshot_img.size)
-                            new_size = (int(headshot_img.size[0] * ratio), int(headshot_img.size[1] * ratio))
-                            print(f"   Resizing headshot from {headshot_img.size} to {new_size} to reduce memory usage")
-                            headshot_img = headshot_img.resize(new_size, Image.Resampling.LANCZOS)
-                        
-                        # Use rembg to remove background
-                        # Note: First call may download model (~100MB) which can take time
-                        print(f"   Removing background with rembg (this may take a moment on first use)...")
-                        # Add a timeout wrapper to prevent hanging
-                        import signal
-                        def timeout_handler(signum, frame):
-                            raise TimeoutError("rembg processing timed out")
-                        
-                        # Set 30 second timeout for rembg processing
-                        signal.signal(signal.SIGALRM, timeout_handler)
-                        signal.alarm(30)
-                        
-                        try:
-                            output = remove(headshot_img)
-                            signal.alarm(0)  # Cancel timeout
-                            headshot_img = output.convert('RGBA')
-                            print(f"   ✓ Background removed successfully with rembg")
-                        except TimeoutError:
-                            signal.alarm(0)
-                            print(f"   Warning: rembg processing timed out, using image as-is")
-                            headshot_img = headshot_img.convert('RGBA')
-                        except Exception as rembg_error:
-                            signal.alarm(0)
-                            print(f"   Warning: rembg failed: {rembg_error}, using image as-is")
-                            headshot_img = headshot_img.convert('RGBA')
-                    except ImportError:
-                        print(f"   Warning: rembg not installed, using image as-is")
-                        print(f"   Install with: pip install rembg[new]")
-                        headshot_img = Image.open(headshot_path)
-                        max_size = 1500
-                        if max(headshot_img.size) > max_size:
-                            ratio = max_size / max(headshot_img.size)
-                            new_size = (int(headshot_img.size[0] * ratio), int(headshot_img.size[1] * ratio))
-                            headshot_img = headshot_img.resize(new_size, Image.Resampling.LANCZOS)
-                        headshot_img = headshot_img.convert('RGBA')
-                    except Exception as e:
-                        print(f"   Warning: rembg background removal failed: {e}, using image as-is")
-                        headshot_img = Image.open(headshot_path)
-                        max_size = 1500
-                        if max(headshot_img.size) > max_size:
-                            ratio = max_size / max(headshot_img.size)
-                            new_size = (int(headshot_img.size[0] * ratio), int(headshot_img.size[1] * ratio))
-                            headshot_img = headshot_img.resize(new_size, Image.Resampling.LANCZOS)
-                        headshot_img = headshot_img.convert('RGBA')
+                    print(f"   REMOVEBG_API_KEY not set, skipping background removal (using image as-is)")
+                    # Skip rembg for now - it can cause memory issues on first model load
+                    # If you want background removal, set REMOVEBG_API_KEY or use rembg later
+                    # Just resize and use image as-is
+                    headshot_img = Image.open(headshot_path)
+                    # Resize to reasonable size (max 1500px) to prevent memory issues
+                    max_size = 1500
+                    if max(headshot_img.size) > max_size:
+                        ratio = max_size / max(headshot_img.size)
+                        new_size = (int(headshot_img.size[0] * ratio), int(headshot_img.size[1] * ratio))
+                        print(f"   Resizing headshot from {headshot_img.size} to {new_size} to reduce memory usage")
+                        headshot_img = headshot_img.resize(new_size, Image.Resampling.LANCZOS)
+                    headshot_img = headshot_img.convert('RGBA')
                 else:
                     try:
                         print(f"   Removing background from headshot...")
