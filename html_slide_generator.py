@@ -1152,7 +1152,7 @@ class HTMLSlideGenerator:
                 headshot_area_height = int(500 * 2.2)  # 1100 (120% bigger than original)
                 # Shift to the right by reducing the negative offset
                 headshot_area_x = map_area_x + (map_width - headshot_area_width) // 2 - 50  # Shifted right (was -150, now -50)
-                headshot_area_y = map_area_y + map_height - 10  # Raised more to prevent cutoff
+                headshot_area_y = map_area_y + map_height - 110  # raise headshot ~100px
                 
                 # Don't erase background - keep it transparent (no black box)
                 # Just paste the headshot directly
@@ -1253,23 +1253,22 @@ class HTMLSlideGenerator:
         # Then draw the main text on top
         stage_draw.text((text_x, text_y), stage_text, fill=stage_color, font=sidebar_bold_font)
         
-        # Rotate -90 degrees (counter-clockwise) - same as SLAUSON&CO
-        stage_img = stage_img.rotate(-90, expand=True)
+        # Rotate so text reads bottom -> top (same as SLAUSON&CO)
+        stage_img = stage_img.rotate(90, expand=True)
         
         # Get final dimensions after rotation
         final_width, final_height = stage_img.size
         
-        # Paste at the top of the orange sidebar, left-aligned
-        # After rotation, the text runs vertically, reading from bottom to top
-        sidebar_width = 200  # Orange sidebar width
-        paste_x = 10  # Align to left side of sidebar (same as SLAUSON&CO)
-        paste_y = 20  # Position at top of sidebar (fixed position to ensure visibility)
+        # Place it in the orange sidebar, ABOVE the SLAUSON&CO mark, aligned the same way
+        sidebar_width = 200
+        paste_x = 10  # same left alignment as SLAUSON&CO
         
-        # Ensure paste coordinates are within slide bounds
-        if paste_x + final_width > sidebar_width:
-            paste_x = max(0, sidebar_width - final_width - 10)
-        if paste_y + final_height > height:
-            paste_y = max(20, height - final_height - 20)
+        # Put it near the bottom, but above the "SLAUSON&CO." area
+        # (tune the 220 gap if you want more/less spacing)
+        paste_y = height - final_height - 220
+        
+        # Clamp to keep inside slide
+        paste_y = max(20, min(paste_y, height - final_height - 20))
         
         slide.paste(stage_img, (paste_x, paste_y), stage_img)
         
