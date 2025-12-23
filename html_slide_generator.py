@@ -1226,12 +1226,12 @@ class HTMLSlideGenerator:
         stage_img = Image.new('RGBA', (stage_img_width, stage_img_height), (0, 0, 0, 0))
         stage_draw = ImageDraw.Draw(stage_img)
         
-        # Draw text at the bottom of the image before rotation
-        # When rotated 90 degrees clockwise, the bottom becomes the left side
-        # Reading left-to-right on vertical text = reading bottom-to-top ✓
+        # Draw text normally (no word reversal) at the top of the image
+        # When rotated -90 degrees, the top becomes the right side
+        # Position text at top so after rotation it's properly positioned
         # Center text horizontally before rotation
         text_x = stage_img_width // 2 - text_width // 2
-        text_y = stage_img_height - text_height - padding  # Position at bottom edge - becomes left edge after rotation
+        text_y = padding  # Position at top edge - becomes right edge after rotation
         
         # Draw stroke by drawing text multiple times with slight offsets (thicker effect)
         for adj in range(-2, 3):
