@@ -310,7 +310,7 @@ class HTMLSlideGenerator:
         """
         try:
             import numpy as np
-            except ImportError:
+        except ImportError:
             print("   Warning: numpy not available for gray background removal")
             return img.convert("RGBA")
 
