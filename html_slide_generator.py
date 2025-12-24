@@ -218,9 +218,8 @@ class HTMLSlideGenerator:
     
     def _remove_background_manual(self, img: Image.Image, tol: int = 38, feather: int = 2) -> Image.Image:
         """
-        Background removal that avoids 'holes' in the subject.
-        Flood-fills from the BORDER based on color similarity to a sampled background color.
-        Works well for headshots with plain/neutral walls.
+        Flood-fill from the border to remove background (RGBA alpha=0),
+        using multi-corner background samples + auto tolerance fallback.
         """
         try:
             import numpy as np
@@ -232,49 +231,65 @@ class HTMLSlideGenerator:
         arr = np.array(img)
         rgb = arr[..., :3].astype(np.int16)
         alpha = arr[..., 3].astype(np.uint8)
-
         H, W = rgb.shape[:2]
 
-        # Sample background color from CORNERS (more stable than full border)
-        corner_size = max(10, min(H, W) // 20)  # ~5% of image, min 10px
-        corners = np.concatenate([
-            rgb[0:corner_size, 0:corner_size, :].reshape(-1, 3),
-            rgb[0:corner_size, W - corner_size:W, :].reshape(-1, 3),
-            rgb[H - corner_size:H, 0:corner_size, :].reshape(-1, 3),
-            rgb[H - corner_size:H, W - corner_size:W, :].reshape(-1, 3),
-        ], axis=0)
-        bg = np.median(corners, axis=0).astype(np.int16)
+        corner_size = max(12, min(H, W) // 18)
 
-        # Mask of pixels close to background color
-        dist = np.sqrt(((rgb - bg) ** 2).sum(axis=2))
-        close = dist <= tol
+        # Compute per-corner medians (better for gradients / non-uniform bg)
+        tl = np.median(rgb[0:corner_size, 0:corner_size].reshape(-1, 3), axis=0)
+        tr = np.median(rgb[0:corner_size, W - corner_size:W].reshape(-1, 3), axis=0)
+        bl = np.median(rgb[H - corner_size:H, 0:corner_size].reshape(-1, 3), axis=0)
+        br = np.median(rgb[H - corner_size:H, W - corner_size:W].reshape(-1, 3), axis=0)
+        bgs = np.stack([tl, tr, bl, br], axis=0).astype(np.int16)
 
-        # Flood fill from edges to find background connected to border
-        bg_mask = np.zeros((H, W), dtype=bool)
+        def compute_close_mask(t):
+            diffs = rgb[None, ...] - bgs[:, None, None, :]
+            dist2 = (diffs * diffs).sum(axis=3)  # (4,H,W)
+            dist = np.sqrt(dist2.min(axis=0))    # (H,W)
+            return dist <= t
+
+        tol_candidates = [tol, 45, 55, 65, 75] if tol < 45 else [tol, tol + 10, tol + 20]
+        best = None
+
         from collections import deque
-        q = deque()
 
-        def push(y, x):
-            if 0 <= y < H and 0 <= x < W and close[y, x] and not bg_mask[y, x]:
-                bg_mask[y, x] = True
-                q.append((y, x))
+        for t in tol_candidates:
+            close = compute_close_mask(t)
 
-        for x in range(W):
-            push(0, x)
-            push(H - 1, x)
-        for y in range(H):
-            push(y, 0)
-            push(y, W - 1)
+            bg_mask = np.zeros((H, W), dtype=bool)
+            q = deque()
 
-        while q:
-            y, x = q.popleft()
-            for dy in (-1, 0, 1):
-                for dx in (-1, 0, 1):
-                    if dy == 0 and dx == 0:
-                        continue
-                    push(y + dy, x + dx)
+            def push(y, x):
+                if 0 <= y < H and 0 <= x < W and close[y, x] and not bg_mask[y, x]:
+                    bg_mask[y, x] = True
+                    q.append((y, x))
 
-        # Remove only border-connected background
+            # seed edges
+            for x in range(W):
+                push(0, x); push(H - 1, x)
+            for y in range(H):
+                push(y, 0); push(y, W - 1)
+
+            # 8-neighborhood flood fill
+            while q:
+                y, x = q.popleft()
+                for dy in (-1, 0, 1):
+                    for dx in (-1, 0, 1):
+                        if dy == 0 and dx == 0:
+                            continue
+                        push(y + dy, x + dx)
+
+            removed_frac = bg_mask.mean()
+            if 0.05 <= removed_frac <= 0.80:
+                best = (t, bg_mask, removed_frac)
+                break
+
+            if best is None or abs(removed_frac - 0.30) < abs(best[2] - 0.30):
+                best = (t, bg_mask, removed_frac)
+
+        t, bg_mask, removed_frac = best
+        print(f"   Manual BG removal: tol={t}, removed={removed_frac:.1%}")
+
         new_alpha = alpha.copy()
         new_alpha[bg_mask] = 0
 
@@ -283,7 +298,7 @@ class HTMLSlideGenerator:
         out_img = Image.fromarray(out, "RGBA")
 
         if feather and feather > 0:
-            a = out_img.split()[-1].filter(ImageFilter.GaussianBlur(radius=feather))
+            a = out_img.split()[-1].filter(ImageFilter.GaussianBlur(radius=min(feather, 2)))
             out_img.putalpha(a)
 
         return out_img
@@ -1076,7 +1091,7 @@ class HTMLSlideGenerator:
                                 print(f"   Warning: API background removal failed for {path}: {e}")
 
                         # Always run manual cleanup (stronger)
-                        img = self._remove_background_manual(img, tol=55, feather=3)
+                        img = self._remove_background_manual(img, tol=40, feather=2)
 
                         # Convert to greyscale while preserving alpha
                         if img.mode == 'RGBA':
@@ -1471,7 +1486,7 @@ class HTMLSlideGenerator:
             headshot_img.load()  # Load fully before save to avoid memory issues
             # Ensure transparent background for PPTX as well
             try:
-                headshot_img = self._remove_background_manual(headshot_img, tol=55, feather=3)
+                headshot_img = self._remove_background_manual(headshot_img, tol=40, feather=2)
             except Exception as e:
                 print(f"   Warning: PPTX fallback background removal failed: {e}")
             # Process headshot (background removal already done in PIL code)
