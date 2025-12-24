@@ -302,6 +302,95 @@ class HTMLSlideGenerator:
             out_img.putalpha(a)
 
         return out_img
+
+    def _remove_background_gray(self, img: Image.Image, tol: int = 18, feather: int = 2) -> Image.Image:
+        """
+        Flood-fill background removal for GRAYSCALE headshots.
+        Uses luminance-only distance with multi-corner sampling and auto-tuned tolerance.
+        """
+        try:
+            import numpy as np
+        except ImportError:
+            print("   Warning: numpy not available for gray background removal")
+            return img.convert("RGBA")
+
+        img = img.convert("RGBA")
+        arr = np.array(img)
+        H, W = arr.shape[:2]
+
+        # Luminance (even if already grayscale, this is safe)
+        lum = (0.299 * arr[..., 0] + 0.587 * arr[..., 1] + 0.114 * arr[..., 2]).astype(np.float32)
+        alpha = arr[..., 3].astype(np.uint8)
+
+        corner_size = max(12, min(H, W) // 18)
+
+        # Multi-corner background samples in luminance
+        tl = np.median(lum[0:corner_size, 0:corner_size])
+        tr = np.median(lum[0:corner_size, W - corner_size:W])
+        bl = np.median(lum[H - corner_size:H, 0:corner_size])
+        br = np.median(lum[H - corner_size:H, W - corner_size:W])
+        bgs = np.array([tl, tr, bl, br], dtype=np.float32)
+
+        # Distance to closest corner sample
+        dist = np.min(np.abs(lum[None, ...] - bgs[:, None, None]), axis=0)
+
+        from collections import deque
+
+        def flood(t):
+            close = dist <= t
+            bg_mask = np.zeros((H, W), dtype=bool)
+            q = deque()
+
+            def push(y, x):
+                if 0 <= y < H and 0 <= x < W and close[y, x] and not bg_mask[y, x]:
+                    bg_mask[y, x] = True
+                    q.append((y, x))
+
+            for x in range(W):
+                push(0, x); push(H - 1, x)
+            for y in range(H):
+                push(y, 0); push(y, W - 1)
+
+            while q:
+                y, x = q.popleft()
+                for dy in (-1, 0, 1):
+                    for dx in (-1, 0, 1):
+                        if dy == 0 and dx == 0:
+                            continue
+                        push(y + dy, x + dx)
+
+            return bg_mask
+
+        tol_candidates = [tol, 22, 26, 30, 36, 44]
+        best_mask = None
+        best_score = None
+        best_t = tol_candidates[0]
+
+        for t in tol_candidates:
+            mask = flood(t)
+            removed = mask.mean()
+            score = abs(removed - 0.30)  # target ~30% removal
+            if best_score is None or score < best_score:
+                best_score = score
+                best_mask = mask
+                best_t = t
+            if 0.08 <= removed <= 0.80:
+                break
+
+        print(f"   Gray BG removal: tol={best_t}, removed={best_mask.mean():.1%}")
+
+        new_alpha = alpha.copy()
+        new_alpha[best_mask] = 0
+
+        out = arr.copy()
+        out[..., 3] = new_alpha
+        out_img = Image.fromarray(out, "RGBA")
+
+        if feather and feather > 0:
+            a = out_img.split()[-1].filter(ImageFilter.GaussianBlur(radius=min(feather, 2)))
+            out_img.putalpha(a)
+
+        return out_img
     
     def _detect_orange_us_bbox(self, img: Image.Image):
         """
@@ -1090,8 +1179,8 @@ class HTMLSlideGenerator:
                             except Exception as e:
                                 print(f"   Warning: API background removal failed for {path}: {e}")
 
-                        # Always run manual cleanup (stronger)
-                        img = self._remove_background_manual(img, tol=40, feather=2)
+                        # Always run grayscale-aware cleanup (stronger for gray headshots)
+                        img = self._remove_background_gray(img, tol=18, feather=2)
 
                         # Convert to greyscale while preserving alpha
                         if img.mode == 'RGBA':
@@ -1484,9 +1573,9 @@ class HTMLSlideGenerator:
             headshot_bytes = io.BytesIO()
             headshot_img = Image.open(headshot_path).convert('RGBA')
             headshot_img.load()  # Load fully before save to avoid memory issues
-            # Ensure transparent background for PPTX as well
+            # Ensure transparent background for PPTX as well (grayscale-aware)
             try:
-                headshot_img = self._remove_background_manual(headshot_img, tol=40, feather=2)
+                headshot_img = self._remove_background_gray(headshot_img, tol=18, feather=2)
             except Exception as e:
                 print(f"   Warning: PPTX fallback background removal failed: {e}")
             # Process headshot (background removal already done in PIL code)
