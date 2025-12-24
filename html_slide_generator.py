@@ -1488,7 +1488,7 @@ class HTMLSlideGenerator:
                                      (logo_w + min_dim) // 2, (logo_h + min_dim) // 2))
             # Only resize if thumbnail didn't produce exact size
             if logo_img.size != (logo_size_px - 20, logo_size_px - 20):
-            logo_img = logo_img.resize((logo_size_px - 20, logo_size_px - 20), Image.Resampling.LANCZOS)
+                logo_img = logo_img.resize((logo_size_px - 20, logo_size_px - 20), Image.Resampling.LANCZOS)
             logo_masked = Image.new('RGBA', (logo_size_px, logo_size_px), (0, 0, 0, 0))
             logo_masked.paste(logo_img, (10, 10), logo_img)
             logo_masked.putalpha(circle_mask)
