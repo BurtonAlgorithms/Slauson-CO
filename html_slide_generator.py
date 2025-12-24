@@ -951,11 +951,11 @@ class HTMLSlideGenerator:
             logo_w, logo_h = logo_img.size
             # Use the smaller dimension to make it more circular
             min_dim = min(logo_w, logo_h)
-            logo_img = logo_img.crop(((logo_w - min_dim) // 2, (logo_h - min_dim) // 2, 
+            logo_img = logo_img.crop(((logo_w - min_dim) // 2, (logo_h - min_dim) // 2,
                                      (logo_w + min_dim) // 2, (logo_h + min_dim) // 2))
             # No need to resize again - thumbnail already resized it, just ensure exact size if needed
             if logo_img.size != (logo_size - 20, logo_size - 20):
-            logo_img = logo_img.resize((logo_size - 20, logo_size - 20), Image.Resampling.LANCZOS)
+                logo_img = logo_img.resize((logo_size - 20, logo_size - 20), Image.Resampling.LANCZOS)
             
             # Apply circular mask to logo
             logo_masked = Image.new('RGBA', (logo_size, logo_size), (0, 0, 0, 0))
