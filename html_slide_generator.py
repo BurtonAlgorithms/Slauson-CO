@@ -1234,7 +1234,7 @@ class HTMLSlideGenerator:
                         gray = img.convert('L')
                         img = Image.merge('RGBA', (gray, gray, gray, a))
                         return img
-                except Exception as e:
+                    except Exception as e:
                         print(f"Warning: failed headshot {path}: {e}")
                         return None
 
