@@ -310,7 +310,7 @@ class HTMLSlideGenerator:
         """
         try:
             import numpy as np
-        except ImportError:
+            except ImportError:
             print("   Warning: numpy not available for gray background removal")
             return img.convert("RGBA")
 
@@ -1396,7 +1396,7 @@ class HTMLSlideGenerator:
                 with open(tmp_file.name, 'rb') as f:
                     img_bytes = f.read()
                 pdf_bytes = img2pdf.convert(img_bytes)
-                return pdf_bytes
+        return pdf_bytes
             finally:
                 # Clean up temporary file
                 try:
