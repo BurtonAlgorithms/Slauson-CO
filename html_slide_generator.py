@@ -491,6 +491,7 @@ class HTMLSlideGenerator:
             print(f"   OpenAI bg removal failed: {e}")
             return None
 
+
     def _darken_edges(self, img: Image.Image) -> Image.Image:
         """
         Gently darkens only semi-transparent edge pixels to reduce white halo.
@@ -626,6 +627,7 @@ class HTMLSlideGenerator:
         except Exception as e:
             print(f"Warning: fallback original headshot failed: {e}")
             return None
+
 
     def _refine_edges(self, img: Image.Image, erode_size: int = 3, blur_radius: float = 1.0) -> Image.Image:
         """
@@ -1477,13 +1479,17 @@ class HTMLSlideGenerator:
                             img = self._remove_background_gray(orig, tol=40, feather=1)
                             img = self._to_grayscale_preserve_alpha(img)
 
-                        # 5) If alpha is too thin, enforce a floor to avoid disappearance
+                        # 5) If alpha is too thin, enforce a floor or fall back to the original (opaque) image
                         o, t, ma = self._alpha_stats(img)
-                        if o < 0.20 or ma < 60:
-                            print(f"   Alpha too thin (opaque={o:.2f}, meanA={ma:.0f}); enforcing alpha floor")
-                            img = self._enforce_alpha_floor(img, floor=80)
+                        if o < 0.30 or ma < 80:
+                            print(f"   Alpha too thin (opaque={o:.2f}, meanA={ma:.0f}); using original (opaque) grayscale to keep subject visible")
+                            orig = Image.open(path).convert("RGBA")
+                            orig.load()
+                            if max(orig.size) > 1500:
+                                orig.thumbnail((1500, 1500), Image.Resampling.LANCZOS)
+                            img = self._to_grayscale_preserve_alpha(orig)
                         else:
-                            img = self._enforce_alpha_floor(img, floor=40)
+                            img = self._enforce_alpha_floor(img, floor=60)
 
                         return img
                     except Exception as e:
