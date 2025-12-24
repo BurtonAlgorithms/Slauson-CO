@@ -428,8 +428,8 @@ class HTMLSlideGenerator:
 
     def _darken_edges(self, img: Image.Image) -> Image.Image:
         """
-        Aggressively darkens semi-transparent pixels to remove 'white halo' artifacts.
-        Uses alpha^3 for stronger darkening of fringes.
+        Gently darkens only semi-transparent edge pixels to reduce white halo.
+        Does NOT darken fully opaque pixels (avoids making the whole face dark).
         """
         try:
             import numpy as np
@@ -437,38 +437,52 @@ class HTMLSlideGenerator:
             return img
 
         arr = np.array(img)
-        rgb = arr[..., :3].astype(float)
-        alpha = arr[..., 3].astype(float) / 255.0
+        rgb = arr[..., :3].astype(np.float32)
+        a = arr[..., 3].astype(np.float32) / 255.0
 
-        # Darken semi-transparent pixels: alpha^3 for stronger effect on fringes
-        # This makes pixels with alpha=0.5 become 0.125 brightness (very dark)
-        factor = alpha * alpha * alpha
-        factor = np.dstack([factor, factor, factor])
-        rgb = rgb * factor
+        # Only darken semi-transparent edge band (not fully opaque pixels)
+        edge = (a > 0.02) & (a < 0.85)
+
+        # Gentle darken: factor stays between 0.7..1.0 based on alpha
+        factor = 0.7 + 0.3 * a
+        rgb[edge] *= factor[edge][..., None]
 
         out = arr.copy()
-        out[..., :3] = rgb.astype(np.uint8)
-        return Image.fromarray(out, 'RGBA')
+        out[..., :3] = np.clip(rgb, 0, 255).astype(np.uint8)
+        return Image.fromarray(out, "RGBA")
 
-    def _fix_alpha_mask(self, img: Image.Image, a_min: int = 25) -> Image.Image:
+    def _fix_alpha_mask(self, img: Image.Image, a_min: int = 8) -> Image.Image:
         """
-        1) Convert alpha to a binary-ish fg mask using a_min
-        2) Keep only the largest connected component (removes speckles)
-        3) Fill holes inside the subject
-        4) Rebuild alpha (and slightly harden it)
+        Safe version: keeps largest blob, fills holes, hardens alpha.
+        Has guards to avoid nuking the entire image if alpha is soft.
         """
         arr = np.array(img.convert("RGBA"))
         a = arr[..., 3].astype(np.uint8)
-
         H, W = a.shape
+
+        # If almost nothing is non-zero alpha, don't touch it
+        if (a > 0).mean() < 0.01:
+            print("   _fix_alpha_mask: alpha mostly empty, skipping")
+            return img
+
         fg = (a > a_min)
 
-        # ---- keep largest connected component (8-neigh) ----
+        # If fg is too small, lower threshold automatically (common for soft masks)
+        if fg.mean() < 0.01:
+            a_min2 = max(1, a_min // 2)
+            fg = (a > a_min2)
+            print(f"   _fix_alpha_mask: fg too small, lowering a_min {a_min}->{a_min2}")
+
+        # Still nothing? skip.
+        if fg.mean() < 0.005:
+            print("   _fix_alpha_mask: fg still too small, skipping")
+            return img
+
         visited = np.zeros((H, W), dtype=bool)
         best_coords = None
         best_size = 0
-
         from collections import deque
+
         for y0 in range(H):
             for x0 in range(W):
                 if fg[y0, x0] and not visited[y0, x0]:
@@ -490,12 +504,16 @@ class HTMLSlideGenerator:
                         best_size = len(coords)
                         best_coords = coords
 
-        keep = np.zeros((H, W), dtype=bool)
-        if best_coords:
-            ys, xs = zip(*best_coords)
-            keep[np.array(ys), np.array(xs)] = True
+        # If we failed to find a component (or it's tiny), don't touch the image
+        if not best_coords or best_size < int(0.01 * H * W):
+            print(f"   _fix_alpha_mask: best component too small ({best_size}), skipping")
+            return img
 
-        # ---- fill holes: background regions NOT connected to border are holes ----
+        keep = np.zeros((H, W), dtype=bool)
+        ys, xs = zip(*best_coords)
+        keep[np.array(ys), np.array(xs)] = True
+
+        # Fill holes: background regions not connected to border
         bg = ~keep
         hole = bg.copy()
         q = deque()
@@ -505,7 +523,6 @@ class HTMLSlideGenerator:
                 hole[y, x] = False
                 q.append((y, x))
 
-        # seed all borders (these are "real background")
         for x in range(W):
             push(0, x); push(H - 1, x)
         for y in range(H):
@@ -519,16 +536,14 @@ class HTMLSlideGenerator:
                         continue
                     push(y + dy, x + dx)
 
-        # after flood: hole==True are enclosed background areas => fill them
         filled = keep | hole
 
-        # ---- rebuild alpha: keep original alpha but zero outside, then harden ----
         new_a = a.copy()
         new_a[~filled] = 0
 
-        # harden alpha so it doesn't stay semi-transparent inside the face
-        # (simple "levels" curve)
-        new_a = np.clip((new_a.astype(np.int16) - 20) * 255 // (255 - 20), 0, 255).astype(np.uint8)
+        # Mild harden (avoid killing soft hair)
+        # map [0..255] to [0..255] with a small lift
+        new_a = np.clip((new_a.astype(np.int16) - 5) * 255 // (255 - 5), 0, 255).astype(np.uint8)
 
         arr[..., 3] = new_a
         return Image.fromarray(arr, "RGBA")
@@ -1382,7 +1397,7 @@ class HTMLSlideGenerator:
                             img = self._remove_background_gray(orig, tol=55, feather=1)
 
                         # 3. Clean mask: keep largest blob, fill holes, harden alpha
-                        img = self._fix_alpha_mask(img, a_min=25)
+                        img = self._fix_alpha_mask(img, a_min=8)
 
                         # 4. Light edge soften (small erode to remove fringe)
                         img = self._refine_edges(img, erode_size=1, blur_radius=0.8)
