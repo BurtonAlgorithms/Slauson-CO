@@ -441,6 +441,24 @@ class HTMLSlideGenerator:
         except Exception:
             return img
 
+    def _strengthen_alpha(self, img: Image.Image, thresh: int = 25, boost: float = 2.0) -> Image.Image:
+        """
+        Make weak alpha masks usable:
+        - zero tiny alpha (background)
+        - boost remaining alpha (foreground)
+        """
+        try:
+            img = img.convert("RGBA")
+            arr = np.array(img)
+            a = arr[..., 3].astype(np.float32)
+            a[a < thresh] = 0
+            a = np.clip(a * boost, 0, 255)
+            arr[..., 3] = a.astype(np.uint8)
+            return Image.fromarray(arr, "RGBA")
+        except Exception:
+            return img
+
+
     def _remove_bg_openai(self, path: str) -> Optional[Image.Image]:
         """
         Optional AI background removal using OpenAI images.edit.
@@ -1479,17 +1497,15 @@ class HTMLSlideGenerator:
                             img = self._remove_background_gray(orig, tol=40, feather=1)
                             img = self._to_grayscale_preserve_alpha(img)
 
-                        # 5) If alpha is too thin, enforce a floor or fall back to the original (opaque) image
+                        # 5) If alpha is weak, strengthen it (do NOT revert to opaque original)
                         o, t, ma = self._alpha_stats(img)
-                        if o < 0.30 or ma < 80:
-                            print(f"   Alpha too thin (opaque={o:.2f}, meanA={ma:.0f}); using original (opaque) grayscale to keep subject visible")
-                            orig = Image.open(path).convert("RGBA")
-                            orig.load()
-                            if max(orig.size) > 1500:
-                                orig.thumbnail((1500, 1500), Image.Resampling.LANCZOS)
-                            img = self._to_grayscale_preserve_alpha(orig)
-                        else:
-                            img = self._enforce_alpha_floor(img, floor=60)
+                        if t < 0.08:
+                            print(f"   Alpha weak (transp={t:.2f}); strengthening mask")
+                            img = self._strengthen_alpha(img, thresh=25, boost=2.0)
+
+                        # Keep edges clean and ensure visible subject
+                        img = self._refine_edges(img, erode_size=1, blur_radius=0.6)
+                        img = self._enforce_alpha_floor(img, floor=40)
 
                         return img
                     except Exception as e:
