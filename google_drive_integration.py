@@ -197,6 +197,31 @@ class GoogleDriveIntegration:
             return link
         except HttpError as error:
             raise Exception(f"Google Drive overwrite error: {error}")
+
+    def find_file_id_by_name(self, filename: str, parent_folder_id: Optional[str] = None) -> Optional[str]:
+        """
+        Find the first file ID matching a given name (optionally within a folder).
+        """
+        if not self.service:
+            raise ValueError("Google Drive service not initialized")
+        q_parts = [f"name = '{filename}'", "mimeType = 'application/pdf'"]
+        if parent_folder_id:
+            q_parts.append(f"'{parent_folder_id}' in parents")
+        query = " and ".join(q_parts)
+        try:
+            resp = self.service.files().list(
+                q=query,
+                spaces='drive',
+                fields="files(id, name)",
+                pageSize=1
+            ).execute()
+            files = resp.get("files", [])
+            if files:
+                return files[0]["id"]
+            return None
+        except HttpError as error:
+            print(f"Warning: Google Drive search error: {error}")
+            return None
     
     def delete_file(self, file_id: str) -> bool:
         """
