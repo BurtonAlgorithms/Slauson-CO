@@ -427,6 +427,20 @@ class HTMLSlideGenerator:
         gray = img.convert("L")
         return Image.merge("RGBA", (gray, gray, gray, a))
 
+    def _enforce_alpha_floor(self, img: Image.Image, floor: int = 50) -> Image.Image:
+        """
+        Ensure non-zero alpha pixels are at least 'floor' to avoid disappearing cutouts.
+        """
+        try:
+            a = np.array(img.split()[-1], dtype=np.uint8)
+            mask = a > 0
+            a[mask] = np.maximum(a[mask], floor)
+            a_img = Image.fromarray(a, 'L')
+            r, g, b, _ = img.split()
+            return Image.merge("RGBA", (r, g, b, a_img))
+        except Exception:
+            return img
+
     def _remove_bg_openai(self, path: str) -> Optional[Image.Image]:
         """
         Optional AI background removal using OpenAI images.edit.
@@ -1446,9 +1460,8 @@ class HTMLSlideGenerator:
                         img = self._remove_bg_best_effort(path, use_api=use_api_removal)
 
                         # 2) Clean mask and edges
-                        img = self._fix_alpha_mask(img, a_min=8)
-                        img = self._refine_edges(img, erode_size=3, blur_radius=1.0)
-                        img = self._darken_edges(img)
+                        img = self._fix_alpha_mask(img, a_min=4)
+                        img = self._refine_edges(img, erode_size=1, blur_radius=0.5)
 
                         # 3) Grayscale while preserving alpha
                         img = self._to_grayscale_preserve_alpha(img)
@@ -1463,6 +1476,14 @@ class HTMLSlideGenerator:
                                 orig.thumbnail((1500, 1500), Image.Resampling.LANCZOS)
                             img = self._remove_background_gray(orig, tol=40, feather=1)
                             img = self._to_grayscale_preserve_alpha(img)
+
+                        # 5) If alpha is too thin, enforce a floor to avoid disappearance
+                        o, t, ma = self._alpha_stats(img)
+                        if o < 0.20 or ma < 60:
+                            print(f"   Alpha too thin (opaque={o:.2f}, meanA={ma:.0f}); enforcing alpha floor")
+                            img = self._enforce_alpha_floor(img, floor=80)
+                        else:
+                            img = self._enforce_alpha_floor(img, floor=40)
 
                         return img
                     except Exception as e:
