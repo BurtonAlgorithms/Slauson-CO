@@ -306,10 +306,10 @@ class HTMLSlideGenerator:
     def _remove_background_gray(self, img: Image.Image, tol: int = 18, feather: int = 2) -> Image.Image:
         """
         Flood-fill background removal for GRAYSCALE headshots.
-        Uses luminance-only distance with multi-corner sampling and auto-tuned tolerance.
+        Uses luminance-only distance with border sampling and auto-tuned tolerance.
         """
-        try:
-            import numpy as np
+            try:
+                import numpy as np
         except ImportError:
             print("   Warning: numpy not available for gray background removal")
             return img.convert("RGBA")
@@ -322,17 +322,16 @@ class HTMLSlideGenerator:
         lum = (0.299 * arr[..., 0] + 0.587 * arr[..., 1] + 0.114 * arr[..., 2]).astype(np.float32)
         alpha = arr[..., 3].astype(np.uint8)
 
-        corner_size = max(12, min(H, W) // 18)
-
-        # Multi-corner background samples in luminance
-        tl = np.median(lum[0:corner_size, 0:corner_size])
-        tr = np.median(lum[0:corner_size, W - corner_size:W])
-        bl = np.median(lum[H - corner_size:H, 0:corner_size])
-        br = np.median(lum[H - corner_size:H, W - corner_size:W])
-        bgs = np.array([tl, tr, bl, br], dtype=np.float32)
-
-        # Distance to closest corner sample
-        dist = np.min(np.abs(lum[None, ...] - bgs[:, None, None]), axis=0)
+        # Border-strip background samples in luminance (safer than corners for tight crops)
+        bs = max(8, min(H, W) // 25)
+        border = np.concatenate([
+            lum[:bs, :].ravel(),
+            lum[-bs:, :].ravel(),
+            lum[:, :bs].ravel(),
+            lum[:, -bs:].ravel(),
+        ])
+        bg = np.median(border)
+        dist = np.abs(lum - bg)
 
         from collections import deque
 
@@ -361,7 +360,7 @@ class HTMLSlideGenerator:
 
             return bg_mask
 
-        tol_candidates = [tol, 22, 26, 30, 36, 44]
+        tol_candidates = [8, 10, 12, 14, 16, 18]
         best_mask = None
         best_score = None
         best_t = tol_candidates[0]
@@ -888,7 +887,7 @@ class HTMLSlideGenerator:
                                      (logo_w + min_dim) // 2, (logo_h + min_dim) // 2))
             # No need to resize again - thumbnail already resized it, just ensure exact size if needed
             if logo_img.size != (logo_size - 20, logo_size - 20):
-                logo_img = logo_img.resize((logo_size - 20, logo_size - 20), Image.Resampling.LANCZOS)
+            logo_img = logo_img.resize((logo_size - 20, logo_size - 20), Image.Resampling.LANCZOS)
             
             # Apply circular mask to logo
             logo_masked = Image.new('RGBA', (logo_size, logo_size), (0, 0, 0, 0))
@@ -1145,7 +1144,7 @@ class HTMLSlideGenerator:
                         use_api_removal = True
                 except:
                     pass
-
+                
                 print("   REMOVEBG_API_KEY not set, using manual background removal" if not use_api_removal else "   Using remove.bg API when available")
 
                 # Headshot target box (tuned to match reference slide)
@@ -1176,11 +1175,24 @@ class HTMLSlideGenerator:
                                     api_img = api_img.convert('RGBA')
                                     img = api_img
                                     print(f"   ✓ Background removed via API for {path}")
-                            except Exception as e:
+                except Exception as e:
                                 print(f"   Warning: API background removal failed for {path}: {e}")
 
-                        # Always run grayscale-aware cleanup (stronger for gray headshots)
-                        img = self._remove_background_gray(img, tol=18, feather=2)
+                        # If API already gave transparency, skip manual removal
+                        def corners_are_transparent(im: Image.Image, a_thresh=10) -> bool:
+                            a = np.array(im.split()[-1])
+                            Hc, Wc = a.shape
+                            cs = max(10, min(Hc, Wc) // 18)
+                            corners = np.concatenate([
+                                a[:cs, :cs].ravel(),
+                                a[:cs, -cs:].ravel(),
+                                a[-cs:, :cs].ravel(),
+                                a[-cs:, -cs:].ravel(),
+                            ])
+                            return corners.mean() < a_thresh
+
+                        if not corners_are_transparent(img):
+                            img = self._remove_background_gray(img, tol=12, feather=1)
 
                         # Convert to greyscale while preserving alpha
                         if img.mode == 'RGBA':
@@ -1220,7 +1232,7 @@ class HTMLSlideGenerator:
 
                     slide.paste(left, (left_x, left_y), left.split()[3])
                     slide.paste(right, (right_x, right_y), right.split()[3])
-                    draw = ImageDraw.Draw(slide)
+                draw = ImageDraw.Draw(slide)
         except Exception as e:
             print(f"Warning: Could not load headshot: {e}")
             import traceback
@@ -1352,7 +1364,7 @@ class HTMLSlideGenerator:
                 with open(tmp_file.name, 'rb') as f:
                     img_bytes = f.read()
                 pdf_bytes = img2pdf.convert(img_bytes)
-                return pdf_bytes
+        return pdf_bytes
             finally:
                 # Clean up temporary file
                 try:
@@ -1476,7 +1488,7 @@ class HTMLSlideGenerator:
                                      (logo_w + min_dim) // 2, (logo_h + min_dim) // 2))
             # Only resize if thumbnail didn't produce exact size
             if logo_img.size != (logo_size_px - 20, logo_size_px - 20):
-                logo_img = logo_img.resize((logo_size_px - 20, logo_size_px - 20), Image.Resampling.LANCZOS)
+            logo_img = logo_img.resize((logo_size_px - 20, logo_size_px - 20), Image.Resampling.LANCZOS)
             logo_masked = Image.new('RGBA', (logo_size_px, logo_size_px), (0, 0, 0, 0))
             logo_masked.paste(logo_img, (10, 10), logo_img)
             logo_masked.putalpha(circle_mask)
@@ -1575,7 +1587,7 @@ class HTMLSlideGenerator:
             headshot_img.load()  # Load fully before save to avoid memory issues
             # Ensure transparent background for PPTX as well (grayscale-aware)
             try:
-                headshot_img = self._remove_background_gray(headshot_img, tol=18, feather=2)
+                headshot_img = self._remove_background_gray(headshot_img, tol=12, feather=1)
             except Exception as e:
                 print(f"   Warning: PPTX fallback background removal failed: {e}")
             # Process headshot (background removal already done in PIL code)
