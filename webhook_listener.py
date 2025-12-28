@@ -11,6 +11,7 @@ from google_drive_integration import GoogleDriveIntegration
 from docsend_integration import DocSendIntegration
 from notion_integration import NotionIntegration
 from config import Config
+from PyPDF2 import PdfWriter, PdfReader
 import os
 import tempfile
 import base64
@@ -414,10 +415,15 @@ def handle_onboarding():
                     except Exception as e:
                         print(f"Warning: Gemini headshot processing failed: {e}")
                         results["errors"].append(f"Headshot processing: {str(e)}")
-                        # Use first headshot as fallback
+                        # Use first headshot as fallback - HTML slide generator will process it
                         if headshot_paths:
+                            # Save the raw headshot path - HTML slide generator will handle processing
+                            combined_headshot_path = headshot_paths[0]
+                            # Read bytes for compatibility, but we'll use the path directly
                             with open(headshot_paths[0], 'rb') as f:
                                 combined_headshot_bytes = f.read()
+                        else:
+                            combined_headshot_path = None
                 else:
                     # Create placeholder
                     from PIL import Image
@@ -464,9 +470,17 @@ def handle_onboarding():
                 
                 try:
                     # Save combined headshot temporarily
+                    # Ensure it's saved as PNG with RGBA format for transparency processing
                     temp_headshot_path = os.path.join(temp_dir, "headshot_combined.png")
-                    with open(temp_headshot_path, 'wb') as f:
-                        f.write(combined_headshot_bytes)
+                    from PIL import Image
+                    # Load the image to ensure it's in the right format (io is already imported at top)
+                    headshot_img = Image.open(io.BytesIO(combined_headshot_bytes))
+                    # Convert to RGBA to ensure alpha channel exists
+                    if headshot_img.mode != 'RGBA':
+                        headshot_img = headshot_img.convert('RGBA')
+                    # Save as PNG to preserve transparency capability
+                    headshot_img.save(temp_headshot_path, 'PNG')
+                    print(f"✓ Saved headshot for processing: {temp_headshot_path} (mode: {headshot_img.mode})")
                     
                     # Get map path if available
                     map_path = os.path.join(temp_dir, "map.png") if os.path.exists(os.path.join(temp_dir, "map.png")) else None
@@ -588,23 +602,69 @@ def handle_onboarding():
                         print(f"✓ Uploaded new Drive PDF: {google_drive_link}")
                     else:
                         try:
-                            print("   Downloading target Drive PDF to append...")
+                            print("   Downloading target Drive PDF...")
                             existing_bytes = drive.download_file(target_file_id)
-                            print("   Appending new slide(s) to existing PDF...")
-                            writer = PdfWriter()
                             old_reader = PdfReader(io.BytesIO(existing_bytes))
                             new_reader = PdfReader(io.BytesIO(slide_pdf_bytes))
-                            for p in old_reader.pages:
-                                writer.add_page(p)
-                            for p in new_reader.pages:
-                                writer.add_page(p)
+                            
+                            # Check if we should replace existing slide for this company
+                            # If the same Notion page is being edited, replace the old slide instead of appending
+                            company_name = company_data.get('name', '').lower().strip()
+                            should_replace = existing_slides and notion_page_id
+                            
+                            if should_replace:
+                                print(f"   Replacing existing slide for company '{company_name}' (Notion page edited)...")
+                                # Try to find and remove the old slide for this company
+                                # Extract company name from PDF pages to identify which page to replace
+                                writer = PdfWriter()
+                                replaced = False
+                                
+                                # Try to identify the company's slide by checking page text
+                                for i, page in enumerate(old_reader.pages):
+                                    try:
+                                        page_text = page.extract_text().lower()
+                                        # Check if this page contains the company name
+                                        if company_name and company_name in page_text:
+                                            print(f"   Found old slide for '{company_name}' at page {i+1}, replacing it...")
+                                            # Skip this page (replace with new slide)
+                                            replaced = True
+                                            # Add new slide in its place
+                                            for new_page in new_reader.pages:
+                                                writer.add_page(new_page)
+                                        else:
+                                            # Keep pages that don't match this company
+                                            writer.add_page(page)
+                                    except Exception as e:
+                                        # If text extraction fails, keep the page
+                                        print(f"   Warning: Could not extract text from page {i+1}: {e}")
+                                        writer.add_page(page)
+                                
+                                # If we didn't find a matching page, append the new slide
+                                if not replaced:
+                                    print(f"   Could not find old slide for '{company_name}', appending new slide...")
+                                    for p in old_reader.pages:
+                                        writer.add_page(p)
+                                    for p in new_reader.pages:
+                                        writer.add_page(p)
+                            else:
+                                # No existing slides for this page, just append
+                                print("   Appending new slide(s) to existing PDF...")
+                                writer = PdfWriter()
+                                for p in old_reader.pages:
+                                    writer.add_page(p)
+                                for p in new_reader.pages:
+                                    writer.add_page(p)
+                            
                             merged_buf = io.BytesIO()
                             writer.write(merged_buf)
                             merged_buf.seek(0)
                             merged_bytes = merged_buf.read()
                             google_drive_link = drive.overwrite_pdf(target_file_id, merged_bytes)
                             results["google_drive_link"] = google_drive_link
-                            print(f"✓ Overwrote existing Drive PDF (DocSend-friendly): {google_drive_link}")
+                            if should_replace and replaced:
+                                print(f"✓ Replaced existing slide in Drive PDF: {google_drive_link}")
+                            else:
+                                print(f"✓ Overwrote existing Drive PDF (DocSend-friendly): {google_drive_link}")
                         except Exception as e:
                             print(f"⚠️  Append/overwrite failed, uploading new file instead: {e}")
                             google_drive_link = drive.upload_pdf(
@@ -649,31 +709,77 @@ def handle_onboarding():
                         # Ensure filename is defined (should be from Step 7, but double-check)
                         if 'filename' not in locals():
                             filename = f"{company_data.get('name', 'slide').replace(' ', '_')}_slide.pdf"
-                        print("Uploading slide PDF to Canva as asset...")
-                        canva = CanvaIntegration()
-                        canva_asset_id = canva.upload_pdf_asset(slide_pdf_bytes, filename)
-                        results["canva_asset_id"] = canva_asset_id
                         
-                        # Check if it's a job ID (import job) or asset ID
-                        import re
-                        is_job_id = re.match(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', canva_asset_id, re.IGNORECASE)
-                        if is_job_id:
-                            # Wait for import completion and get design ID
-                            print("Waiting for Canva import to complete...")
-                            status_info = canva.wait_for_import_completion(canva_asset_id, max_wait_seconds=60, poll_interval=2)
-                            if status_info.get('status') == 'success':
-                                canva_design_id = status_info.get('design_id')
-                                canva_design_url = status_info.get('design_url')
-                                results["canva_design_id"] = canva_design_id
-                                results["canva_design_url"] = canva_design_url
-                                if existing_slides:
-                                    print(f"✓ Created new Canva design (replacing old): {canva_design_id}")
+                        canva = CanvaIntegration()
+                        
+                        # Check if we should append to existing Canva design
+                        static_canva_design_id = os.getenv("CANVA_STATIC_DESIGN_ID") or getattr(Config, "CANVA_STATIC_DESIGN_ID", None)
+                        target_canva_design_id = None
+                        
+                        # Priority: static design ID > existing design from Notion
+                        if static_canva_design_id:
+                            target_canva_design_id = static_canva_design_id
+                            print(f"   Using static Canva design ID: {target_canva_design_id}")
+                        elif existing_slides and existing_canva_design_id:
+                            target_canva_design_id = existing_canva_design_id
+                            print(f"   Found existing Canva design ID: {target_canva_design_id}")
+                        
+                        if target_canva_design_id:
+                            # Append to existing design
+                            print("Appending slide to existing Canva design...")
+                            try:
+                                canva_asset_id = canva.append_slide_to_design(target_canva_design_id, slide_pdf_bytes, filename)
+                                results["canva_asset_id"] = canva_asset_id
+                                
+                                # Check if it's a job ID (import job) or design ID
+                                import re
+                                is_job_id = re.match(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', canva_asset_id, re.IGNORECASE)
+                                if is_job_id:
+                                    # Wait for import completion and get design ID
+                                    print("Waiting for Canva import to complete...")
+                                    status_info = canva.wait_for_import_completion(canva_asset_id, max_wait_seconds=60, poll_interval=2)
+                                    if status_info.get('status') == 'success':
+                                        canva_design_id = status_info.get('design_id')
+                                        canva_design_url = status_info.get('design_url')
+                                        results["canva_design_id"] = canva_design_id
+                                        results["canva_design_url"] = canva_design_url
+                                        print(f"✓ Appended slide to Canva design: {canva_design_id}")
+                                    else:
+                                        print(f"⚠️  Canva import job did not complete successfully: {status_info.get('status')}")
                                 else:
-                                    print(f"✓ Created Canva design: {canva_design_id}")
+                                    # It's already a design ID
+                                    canva_design_id = canva_asset_id
+                                    results["canva_design_id"] = canva_design_id
+                                    print(f"✓ Appended slide to Canva design: {canva_design_id}")
+                            except Exception as e:
+                                print(f"⚠️  Failed to append to existing design: {e}")
+                                print("   Falling back to uploading as new design...")
+                                # Fall through to new design upload
+                                target_canva_design_id = None
+                        
+                        if not target_canva_design_id:
+                            # Upload as new design
+                            print("Uploading slide PDF to Canva as new design...")
+                            canva_asset_id = canva.upload_pdf_asset(slide_pdf_bytes, filename)
+                            results["canva_asset_id"] = canva_asset_id
+                            
+                            # Check if it's a job ID (import job) or asset ID
+                            import re
+                            is_job_id = re.match(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', canva_asset_id, re.IGNORECASE)
+                            if is_job_id:
+                                # Wait for import completion and get design ID
+                                print("Waiting for Canva import to complete...")
+                                status_info = canva.wait_for_import_completion(canva_asset_id, max_wait_seconds=60, poll_interval=2)
+                                if status_info.get('status') == 'success':
+                                    canva_design_id = status_info.get('design_id')
+                                    canva_design_url = status_info.get('design_url')
+                                    results["canva_design_id"] = canva_design_id
+                                    results["canva_design_url"] = canva_design_url
+                                    print(f"✓ Created new Canva design: {canva_design_id}")
+                                else:
+                                    print(f"⚠️  Canva import job did not complete successfully: {status_info.get('status')}")
                             else:
-                                print(f"⚠️  Canva import job did not complete successfully: {status_info.get('status')}")
-                        else:
-                            print(f"✓ Uploaded PDF to Canva assets: {canva_asset_id}")
+                                print(f"✓ Uploaded PDF to Canva assets: {canva_asset_id}")
                     else:
                         print("Warning: Canva credentials not configured, skipping PDF upload")
                         results["errors"].append("Canva PDF upload: Credentials not configured")

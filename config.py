@@ -20,8 +20,7 @@ class Config:
     CANVA_TEMPLATE_ID = os.getenv("CANVA_TEMPLATE_ID")
     CANVA_CLIENT_ID = os.getenv("CANVA_CLIENT_ID")
     CANVA_CLIENT_SECRET = os.getenv("CANVA_CLIENT_SECRET")
-    CANVA_ACCESS_TOKEN = os.getenv("CANVA_ACCESS_TOKEN")
-    CANVA_REFRESH_TOKEN = os.getenv("CANVA_REFRESH_TOKEN")
+    CANVA_STATIC_DESIGN_ID = os.getenv("CANVA_STATIC_DESIGN_ID")  # Design ID to append slides to
     
     # DocSend
     DOCSEND_API_KEY = os.getenv("DOCSEND_API_KEY")

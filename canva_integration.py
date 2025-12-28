@@ -436,6 +436,79 @@ class CanvaIntegration:
         except Exception as e:
             raise Exception(f"Error checking import job status: {e}")
     
+    def append_slide_to_design(self, existing_design_id: str, new_slide_pdf_bytes: bytes, filename: str = "merged_slides.pdf") -> str:
+        """
+        Append a new slide to an existing Canva design by:
+        1. Exporting the existing design as PDF
+        2. Merging with the new slide PDF
+        3. Uploading the merged PDF back to Canva (replaces the design)
+        
+        Args:
+            existing_design_id: Canva design ID to append to
+            new_slide_pdf_bytes: PDF bytes of the new slide to append
+            filename: Filename for the merged PDF
+            
+        Returns:
+            New design ID (or job ID if async)
+        """
+        try:
+            print(f"   Appending slide to existing Canva design: {existing_design_id}")
+            
+            # Step 1: Export existing design as PDF
+            print("   Exporting existing design as PDF...")
+            existing_pdf_bytes = self._export_as_pdf(existing_design_id)
+            print(f"   ✓ Exported existing design ({len(existing_pdf_bytes)} bytes)")
+            
+            # Step 2: Merge PDFs
+            print("   Merging PDFs...")
+            from PyPDF2 import PdfReader, PdfWriter
+            import io
+            
+            writer = PdfWriter()
+            
+            # Add pages from existing PDF
+            existing_reader = PdfReader(io.BytesIO(existing_pdf_bytes))
+            for page in existing_reader.pages:
+                writer.add_page(page)
+            
+            # Add pages from new slide PDF
+            new_reader = PdfReader(io.BytesIO(new_slide_pdf_bytes))
+            for page in new_reader.pages:
+                writer.add_page(page)
+            
+            # Write merged PDF
+            merged_buffer = io.BytesIO()
+            writer.write(merged_buffer)
+            merged_buffer.seek(0)
+            merged_pdf_bytes = merged_buffer.read()
+            
+            print(f"   ✓ Merged PDFs ({len(merged_pdf_bytes)} bytes, {len(existing_reader.pages) + len(new_reader.pages)} pages)")
+            
+            # Step 3: Upload merged PDF (this will create a new design or replace if Canva supports it)
+            # Note: Canva API might not support direct replacement, so this creates a new design
+            # You'll need to delete the old design manually or track the new ID
+            print("   Uploading merged PDF to Canva...")
+            new_design_id = self.upload_pdf_asset(merged_pdf_bytes, filename)
+            
+            # If it's a job ID, wait for completion
+            import re
+            is_job_id = re.match(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', new_design_id, re.IGNORECASE)
+            if is_job_id:
+                status_info = self.wait_for_import_completion(new_design_id, max_wait_seconds=60, poll_interval=2)
+                if status_info.get('status') == 'success':
+                    final_design_id = status_info.get('design_id')
+                    print(f"   ✓ Appended slide to design. New design ID: {final_design_id}")
+                    print(f"   ⚠️  Note: Old design ({existing_design_id}) should be deleted manually")
+                    return final_design_id
+            
+            return new_design_id
+            
+        except Exception as e:
+            print(f"   ⚠️  Failed to append to existing design: {e}")
+            # Fallback: just upload the new slide as a separate design
+            print("   Falling back to uploading new slide as separate design...")
+            return self.upload_pdf_asset(new_slide_pdf_bytes, filename)
+    
     def wait_for_import_completion(self, job_id: str, max_wait_seconds: int = 60, poll_interval: int = 2) -> dict:
         """
         Poll the import job status until it completes (success or failed).
@@ -467,61 +540,29 @@ class CanvaIntegration:
         # Timeout
         raise Exception(f"Import job {job_id} did not complete within {max_wait_seconds} seconds")
     
-    def delete_design(self, design_id: str) -> bool:
-        """
-        Delete a Canva design by design ID.
-        
-        Args:
-            design_id: Canva design ID (e.g., "DAG7kettpY0")
-            
-        Returns:
-            True if deletion successful, False otherwise
-        """
-        try:
-            access_token = self._get_access_token()
-            if not access_token:
-                print("⚠️  Cannot delete Canva design: No access token")
-                return False
-            
-            url = f"{self.base_url}/designs/{design_id}"
-            headers = {
-                "Authorization": f"Bearer {access_token}",
-                "Content-Type": "application/json"
-            }
-            
-            response = requests.delete(url, headers=headers)
-            
-            if response.status_code == 204 or response.status_code == 200:
-                print(f"✓ Deleted Canva design: {design_id}")
-                return True
-            else:
-                print(f"⚠️  Error deleting Canva design {design_id}: {response.status_code} - {response.text}")
-                return False
-        except Exception as e:
-            print(f"⚠️  Exception deleting Canva design: {e}")
-            return False
-    
     def _load_tokens(self):
-        """Load stored OAuth tokens from environment variables or file."""
-        # Priority 1: Load from environment variables (for Render/production)
-        if hasattr(Config, 'CANVA_ACCESS_TOKEN') and Config.CANVA_ACCESS_TOKEN:
-            self._access_token = Config.CANVA_ACCESS_TOKEN
-            if hasattr(Config, 'CANVA_REFRESH_TOKEN') and Config.CANVA_REFRESH_TOKEN:
-                self._refresh_token = Config.CANVA_REFRESH_TOKEN
-            if self._access_token:
-                print("✓ Loaded Canva OAuth tokens from environment variables")
-                return
-        
-        # Priority 2: Load from file (for local development)
+        """Load stored OAuth tokens from file."""
         if os.path.exists(self.token_file):
             try:
                 import json
+                import time
                 with open(self.token_file, 'r') as f:
                     tokens = json.load(f)
                     self._access_token = tokens.get("access_token")
                     self._refresh_token = tokens.get("refresh_token")
+                    token_refreshed_at = tokens.get("token_refreshed_at", 0)
+                    
                     if self._access_token:
-                        print("✓ Loaded stored Canva OAuth tokens from file")
+                        print("✓ Loaded stored Canva OAuth tokens")
+                        # Check if token is older than 4 hours (14400 seconds)
+                        current_time = time.time()
+                        time_since_refresh = current_time - token_refreshed_at
+                        hours_since_refresh = time_since_refresh / 3600
+                        
+                        if time_since_refresh > 14400:  # 4 hours
+                            print(f"   Token is {hours_since_refresh:.1f} hours old (>4 hours), will refresh before next request")
+                        else:
+                            print(f"   Token is {hours_since_refresh:.1f} hours old (still valid)")
             except Exception as e:
                 print(f"Warning: Could not load tokens from {self.token_file}: {e}")
     
@@ -529,6 +570,10 @@ class CanvaIntegration:
         """Save OAuth tokens to file."""
         try:
             import json
+            import time
+            # Add timestamp when token was refreshed
+            if "access_token" in tokens:
+                tokens["token_refreshed_at"] = time.time()
             with open(self.token_file, 'w') as f:
                 json.dump(tokens, f, indent=2)
             self._access_token = tokens.get("access_token")
@@ -568,12 +613,8 @@ class CanvaIntegration:
         for token_url in token_endpoints:
             try:
                 print(f"   Trying refresh endpoint: {token_url}")
-                # OAuth 2.0 token endpoints expect form-urlencoded data (not JSON)
-                response = requests.post(
-                    token_url, 
-                    data=data,
-                    headers={"Content-Type": "application/x-www-form-urlencoded"}
-                )
+                # OAuth endpoints require form-urlencoded, not JSON
+                response = requests.post(token_url, data=data)
                 
                 if response.status_code == 200:
                     tokens = response.json()
@@ -623,49 +664,62 @@ class CanvaIntegration:
     
     def _get_access_token(self) -> str:
         """
-        Get OAuth access token using stored tokens or refresh token flow.
+        Get OAuth access token using refresh token or stored tokens.
         
         Priority:
-        1. Stored OAuth access token (if available)
-        2. Refresh token flow (if refresh token is available)
+        1. Check if stored token is >4 hours old, refresh if needed
+        2. Use stored OAuth access token (if available and not expired)
         3. API key (if no OAuth setup)
-        
-        Note: Canva doesn't support client_credentials grant type, only authorization_code and refresh_token.
         
         Returns:
             Access token string
         """
-        # Priority 1: Try stored access token first
-        if self._access_token:
-            print("   Using stored Canva access token")
-            return self._access_token
+        # Check if token needs refresh (>4 hours old)
+        if self._access_token and self._refresh_token and self.client_id and self.client_secret:
+            import time
+            import json
+            if os.path.exists(self.token_file):
+                try:
+                    with open(self.token_file, 'r') as f:
+                        tokens = json.load(f)
+                        token_refreshed_at = tokens.get("token_refreshed_at", 0)
+                        current_time = time.time()
+                        time_since_refresh = current_time - token_refreshed_at
+                        
+                        if time_since_refresh > 14400:  # 4 hours (14400 seconds)
+                            hours_old = time_since_refresh / 3600
+                            print(f"   Token is {hours_old:.1f} hours old (>4 hours), refreshing automatically...")
+                            return self._refresh_access_token()
+                except Exception as e:
+                    print(f"   ⚠️  Could not check token age: {e}")
         
-        # Priority 2: Try refresh token flow (if refresh token is available)
+        # Priority 1: Use refresh token if available (Canva doesn't support client_credentials)
         if self._refresh_token and self.client_id and self.client_secret:
             try:
-                print("   Attempting to refresh Canva access token...")
+                print("   Refreshing access token using refresh token...")
                 return self._refresh_access_token()
             except Exception as e:
-                print(f"   ⚠️  Could not refresh token: {e}")
-                print("   Please run: python setup_canva_oauth.py to re-authenticate")
+                print(f"   ⚠️  Token refresh failed: {e}")
+                print("   Will try to use cached token or prompt for re-authentication")
         
-        # Priority 3: Use API key directly (if client_id is actually the API key)
+        # Priority 2: Use stored OAuth token if available
+        if self._access_token:
+            return self._access_token
+        
+        # Fallback: Use API key directly (if client_id is actually the API key)
         if self.api_key:
             return self.api_key
         
-        # If we have client_id/secret but no tokens, user needs to set up OAuth
+        # If client_id is set but no refresh token, user needs to run OAuth setup
         if self.client_id and self.client_secret:
             raise ValueError(
-                "Canva OAuth not set up. Canva doesn't support client_credentials flow.\n"
-                "Please run: python setup_canva_oauth.py to set up OAuth authentication.\n"
-                "This will use authorization_code flow (requires one-time browser login)."
+                "No refresh token available. Canva API requires OAuth flow (not client credentials). "
+                "Please run: python setup_canva_oauth.py to set up OAuth tokens."
             )
         
         raise ValueError(
-            "Canva authentication not configured.\n"
-            "Options:\n"
-            "1. Set CANVA_API_KEY (if you have a direct API key)\n"
-            "2. Set CANVA_CLIENT_ID and CANVA_CLIENT_SECRET, then run: python setup_canva_oauth.py"
+            "Either CANVA_API_KEY or both CANVA_CLIENT_ID and CANVA_CLIENT_SECRET must be configured.\n"
+            "For OAuth (recommended), run: python setup_canva_oauth.py"
         )
     
     def _make_authenticated_request(self, method: str, url: str, **kwargs):
@@ -735,6 +789,9 @@ class CanvaIntegration:
                     headers["Authorization"] = f"Bearer {access_token}"
                     kwargs["headers"] = headers
                     response = requests.request(method, url, **kwargs)
+                    # If refresh worked, update the cached token
+                    if response.status_code not in [401, 403]:
+                        self._access_token = access_token
                     
                     if response.status_code in [401, 403]:
                         content_type = response.headers.get('Content-Type', '')
@@ -801,29 +858,63 @@ class CanvaIntegration:
         Returns:
             Design ID of duplicated template
         """
+        if not self.template_id:
+            raise ValueError("CANVA_TEMPLATE_ID not configured")
+        
+        print(f"   Duplicating template: {self.template_id[:20]}..." if len(self.template_id) > 20 else f"   Duplicating template: {self.template_id}")
+        
         # Try different duplication endpoints and methods
         # Note: www.canva.com endpoints return HTML error pages, so we avoid them
         duplicate_endpoints = [
-            # Try duplicate endpoint first (most common) - design ID in URL path
+            # Try duplicate endpoint without body first (some APIs don't need it)
+            (f"{self.base_url}/designs/{self.template_id}/duplicate", "post", None),
+            # Try duplicate endpoint with empty body
             (f"{self.base_url}/designs/{self.template_id}/duplicate", "post", {}),
-            # Try copy endpoint
-            (f"{self.base_url}/designs/{self.template_id}/copy", "post", {}),
-            # Try creating new design from existing design (template_id is a design, not asset)
-            # The 'type' field is required according to the error message
+            # Try duplicate endpoint with type field (API requires 'type' not null)
+            (f"{self.base_url}/designs/{self.template_id}/duplicate", "post", {"type": "DESIGN"}),
+            (f"{self.base_url}/designs/{self.template_id}/duplicate", "post", {"type": "STANDARD"}),
+            # Try copy endpoint without body
+            (f"{self.base_url}/designs/{self.template_id}/copy", "post", None),
+            # Try copy endpoint with type field
+            (f"{self.base_url}/designs/{self.template_id}/copy", "post", {"type": "DESIGN"}),
+            (f"{self.base_url}/designs/{self.template_id}/copy", "post", {"type": "STANDARD"}),
+            # Try creating new design from existing design with design_type
+            # Note: API might require design_type alone, or with template_id instead of source_design_id
+            (f"{self.base_url}/designs", "post", {"design_type": "DESIGN", "template_id": self.template_id}),
+            (f"{self.base_url}/designs", "post", {"design_type": "STANDARD", "template_id": self.template_id}),
+            (f"{self.base_url}/designs", "post", {"source_design_id": self.template_id, "design_type": "DESIGN"}),
+            (f"{self.base_url}/designs", "post", {"source_design_id": self.template_id, "design_type": "STANDARD"}),
+            # Try with asset_id (if template is an asset)
+            (f"{self.base_url}/designs", "post", {"asset_id": self.template_id, "design_type": "DESIGN"}),
+            (f"{self.base_url}/designs", "post", {"asset_id": self.template_id, "design_type": "STANDARD"}),
+            # Try legacy 'type' field for POST /designs
             (f"{self.base_url}/designs", "post", {"source_design_id": self.template_id, "type": "DESIGN"}),
             (f"{self.base_url}/designs", "post", {"source_design_id": self.template_id, "type": "STANDARD"}),
-            # Try without type (might work if source_design_id is enough)
-            (f"{self.base_url}/designs", "post", {"source_design_id": self.template_id}),
         ]
         
         last_error = None
         for endpoint, method, payload in duplicate_endpoints:
             try:
-                response = self._make_authenticated_request(
-                    method,
-                    endpoint,
-                    json=payload
-                )
+                # Handle None payload (no body) vs empty dict vs dict with data
+                # API requires Content-Type header even for empty body
+                if payload is None:
+                    # No body, but need Content-Type header
+                    response = self._make_authenticated_request(
+                        method, 
+                        endpoint,
+                        headers={"Content-Type": "application/json"}
+                    )
+                elif payload == {}:
+                    # Empty dict - send empty JSON body with Content-Type
+                    response = self._make_authenticated_request(
+                        method, 
+                        endpoint, 
+                        json={},
+                        headers={"Content-Type": "application/json"}
+                    )
+                else:
+                    # Payload with data - json= will set Content-Type automatically
+                    response = self._make_authenticated_request(method, endpoint, json=payload)
                 
                 if response.status_code in [200, 201]:
                     try:

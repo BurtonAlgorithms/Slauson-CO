@@ -647,6 +647,27 @@ class HTMLSlideGenerator:
             return None
 
 
+    def _resize_cover(self, im: Image.Image, target_w: int, target_h: int) -> Image.Image:
+        """
+        Scale UP or DOWN to completely fill (target_w, target_h) while preserving aspect ratio,
+        then center-crop to exact size. (Like CSS background-size: cover)
+        """
+        im = im.convert("RGBA")
+        w, h = im.size
+        if w == 0 or h == 0:
+            return im
+
+        scale = max(target_w / w, target_h / h)  # cover => fill box
+        new_w = max(1, int(round(w * scale)))
+        new_h = max(1, int(round(h * scale)))
+
+        im = im.resize((new_w, new_h), Image.Resampling.LANCZOS)
+
+        # Center crop to exact target size
+        left = max(0, (new_w - target_w) // 2)
+        top = max(0, (new_h - target_h) // 2)
+        return im.crop((left, top, left + target_w, top + target_h))
+
     def _refine_edges(self, img: Image.Image, erode_size: int = 3, blur_radius: float = 1.0) -> Image.Image:
         """
         Shrinks the alpha mask (erode) to remove halos, then softens the edge.
@@ -1468,78 +1489,149 @@ class HTMLSlideGenerator:
                 
                 print("   REMOVEBG_API_KEY not set, using manual background removal" if not use_api_removal else "   Using remove.bg API when available")
 
-                # Headshot target box (tuned to match reference slide)
-                headshot_area_width = 820
-                headshot_area_height = 900
-                headshot_area_x = map_area_x + (map_width - headshot_area_width) // 2 + 20
-                headshot_area_y = map_area_y + int(map_height * 0.46)
+                # Headshot target box (sized to match reference slide)
+                headshot_area_width = 600   # Smaller to match reference
+                headshot_area_height = 600   # Keep square
+                
+                # Keep it in the same general area under the map
+                headshot_area_x = map_area_x + (map_width - headshot_area_width) // 2 - 100  # Moved left (was +20)
+                headshot_area_y = map_area_y + int(map_height * 0.85)  # Lowered more (was 0.75)
 
                 def load_process_headshot(path: str) -> Optional[Image.Image]:
                     try:
-                        # 1) Best effort pipeline (API -> OpenAI -> rembg -> floodfill)
+                        print(f"    Processing headshot: {path}")
+                        
+                        # 0) PREPARE ORIGINAL
+                        original = Image.open(path).convert("RGBA")
+                        # Keep original size reasonable for processing (780x780 target, so 1500 is plenty)
+                        if max(original.size) > 1500:
+                            original.thumbnail((1500, 1500), Image.Resampling.LANCZOS)
+                        
+                        # --- HELPER: CIRCULAR CROP FALLBACK ---
+                        # If BG removal fails, we use this to make a nice circle instead of a square
+                        def make_circular(img_in):
+                            print("    Applying Circular Crop Fallback...")
+                            # 1. Create a square canvas based on smallest dimension
+                            w, h = img_in.size
+                            d = min(w, h)
+                            # Center crop to square
+                            left = (w - d) // 2
+                            top = (h - d) // 2
+                            img_sq = img_in.crop((left, top, left + d, top + d))
+                            
+                            # 2. Create circular mask
+                            mask = Image.new('L', (d, d), 0)
+                            draw_mask = ImageDraw.Draw(mask)
+                            draw_mask.ellipse((0, 0, d, d), fill=255)
+                            
+                            # 3. Apply mask
+                            img_sq.putalpha(mask)
+                            
+                            # 4. Grayscale it to match style
+                            gray = img_sq.convert("L")
+                            return Image.merge("RGBA", (gray, gray, gray, mask))
+
+                        # 1) Attempt Background Removal
                         img = self._remove_bg_best_effort(path, use_api=use_api_removal)
+                        
+                        # Check if background removal returned None
+                        if img is None:
+                            print(f"    WARNING: Background removal returned None. Using Circle.")
+                            return make_circular(original)
 
-                        # 2) Clean mask and edges
-                        img = self._fix_alpha_mask(img, a_min=4)
-                        img = self._refine_edges(img, erode_size=1, blur_radius=0.5)
+                        # 2) SAFETY CHECK 1: Did we wipe the image? 
+                        # If opacity is < 5%, we deleted the person. Use Circular Fallback.
+                        opaque_frac, transp_frac, mean_alpha = self._alpha_stats(img)
+                        print(f"    After BG removal: opaque={opaque_frac:.2f}, transp={transp_frac:.2f}, meanA={mean_alpha:.0f}")
+                        if opaque_frac < 0.05: 
+                            print(f"    WARNING: BG removal wiped image (opaque={opaque_frac:.2f}). Using Circle.")
+                            return make_circular(original)
 
-                        # 3) Grayscale while preserving alpha
+                        # 3) Only clean up mask if rembg didn't work well (low transparency)
+                        # If rembg already gave us good transparency, skip _fix_alpha_mask to avoid wiping it
+                        if transp_frac < 0.10:
+                            # Background removal was weak, try to clean it up
+                            print(f"    Transparency is weak ({transp_frac:.2f}), attempting to clean mask...")
+                            img_before_fix = img.copy()
+                            img = self._fix_alpha_mask(img, a_min=2)
+                            
+                            # Check if _fix_alpha_mask made it worse
+                            opaque_after, transp_after, mean_after = self._alpha_stats(img)
+                            print(f"    After _fix_alpha_mask: opaque={opaque_after:.2f}, transp={transp_after:.2f}, meanA={mean_after:.0f}")
+                            
+                            # If it made it worse (less opaque), revert
+                            if opaque_after < opaque_frac * 0.5:  # Lost more than 50% of opacity
+                                print(f"    WARNING: _fix_alpha_mask made it worse, reverting...")
+                                img = img_before_fix
+                        else:
+                            print(f"    Good transparency ({transp_frac:.2f}), skipping _fix_alpha_mask to preserve quality")
+                        
+                        # 4) Final safety check before processing
+                        final_check_o, final_check_t, _ = self._alpha_stats(img)
+                        if final_check_o < 0.05:
+                            print(f"    WARNING: Image has no subject (opaque={final_check_o:.2f}). Using Circle.")
+                            return make_circular(original)
+
+                        # 5) Standard Processing (Grayscale + Edges)
                         img = self._to_grayscale_preserve_alpha(img)
-
-                        # 4) If transparency is still weak, force a gray flood-fill fallback
-                        o, t, ma = self._alpha_stats(img)
-                        if t < 0.05:
-                            print("   BG removal weak; forcing gray floodfill fallback")
-                            orig = Image.open(path).convert("RGBA")
-                            orig.load()
-                            if max(orig.size) > 1500:
-                                orig.thumbnail((1500, 1500), Image.Resampling.LANCZOS)
-                            img = self._remove_background_gray(orig, tol=40, feather=1)
-                            img = self._to_grayscale_preserve_alpha(img)
-
-                        # 5) If alpha is weak, strengthen it (do NOT revert to opaque original)
-                        o, t, ma = self._alpha_stats(img)
-                        if t < 0.08:
-                            print(f"   Alpha weak (transp={t:.2f}); strengthening mask")
-                            img = self._strengthen_alpha(img, thresh=25, boost=2.0)
-
-                        # Keep edges clean and ensure visible subject
-                        img = self._refine_edges(img, erode_size=1, blur_radius=0.6)
-                        img = self._enforce_alpha_floor(img, floor=40)
+                        img = self._refine_edges(img, erode_size=1, blur_radius=0.5)
+                        
+                        # Final check before returning
+                        final_o, final_t, final_ma = self._alpha_stats(img)
+                        print(f"    Final headshot stats: opaque={final_o:.2f}, transp={final_t:.2f}, meanA={final_ma:.0f}")
+                        if final_o < 0.05:
+                            print(f"    WARNING: Final image has no subject (opaque={final_o:.2f}). Using Circle.")
+                            return make_circular(original)
 
                         return img
+
                     except Exception as e:
                         print(f"Warning: failed headshot {path}: {e}")
                         import traceback
                         traceback.print_exc()
-                        return None
+                        # Final safety: Return original but circular
+                        try:
+                            orig = Image.open(path).convert("RGBA")
+                            # Define make_circular here too for the exception handler
+                            def make_circular(img_in):
+                                print("    Applying Circular Crop Fallback...")
+                                w, h = img_in.size
+                                d = min(w, h)
+                                left = (w - d) // 2
+                                top = (h - d) // 2
+                                img_sq = img_in.crop((left, top, left + d, top + d))
+                                mask = Image.new('L', (d, d), 0)
+                                draw_mask = ImageDraw.Draw(mask)
+                                draw_mask.ellipse((0, 0, d, d), fill=255)
+                                img_sq.putalpha(mask)
+                                gray = img_sq.convert("L")
+                                return Image.merge("RGBA", (gray, gray, gray, mask))
+                            return make_circular(orig)
+                        except:
+                            return None
 
                 imgs = [load_process_headshot(p) for p in headshot_paths[:2]]
                 imgs = [im for im in imgs if im is not None]
 
                 if len(imgs) == 1:
                     im = imgs[0]
-                    im.thumbnail((headshot_area_width, headshot_area_height), Image.Resampling.LANCZOS)
-                    paste_x = headshot_area_x + (headshot_area_width - im.size[0]) // 2
-                    paste_y = headshot_area_y + (headshot_area_height - im.size[1]) // 2
-                    slide.paste(im, (paste_x, paste_y), im.split()[3])
+                    im = self._resize_cover(im, headshot_area_width, headshot_area_height)
+                    slide.paste(im, (headshot_area_x, headshot_area_y), im.split()[3])
                     draw = ImageDraw.Draw(slide)
                 elif len(imgs) == 2:
                     gap = 30
                     each_w = (headshot_area_width - gap) // 2
                     each_h = headshot_area_height
                     left, right = imgs
-                    left.thumbnail((each_w, each_h), Image.Resampling.LANCZOS)
-                    right.thumbnail((each_w, each_h), Image.Resampling.LANCZOS)
+                    left = self._resize_cover(left, each_w, each_h)
+                    right = self._resize_cover(right, each_w, each_h)
 
-                    base_y = headshot_area_y + headshot_area_height
-                    left_x = headshot_area_x + (each_w - left.size[0]) // 2
-                    right_x = headshot_area_x + each_w + gap + (each_w - right.size[0]) // 2
-                    left_y = base_y - left.size[1]
-                    right_y = base_y - right.size[1]
+                    left_x = headshot_area_x
+                    right_x = headshot_area_x + each_w + gap
+                    y = headshot_area_y
 
-                    slide.paste(left, (left_x, left_y), left.split()[3])
-                    slide.paste(right, (right_x, right_y), right.split()[3])
+                    slide.paste(left, (left_x, y), left.split()[3])
+                    slide.paste(right, (right_x, y), right.split()[3])
                 draw = ImageDraw.Draw(slide)
         except Exception as e:
             print(f"Warning: Could not load headshot: {e}")
@@ -1901,6 +1993,8 @@ class HTMLSlideGenerator:
                 headshot_img = self._remove_background_gray(headshot_img, tol=12, feather=1)
             except Exception as e:
                 print(f"   Warning: PPTX fallback background removal failed: {e}")
+            # ALWAYS convert to grayscale while preserving alpha (headshot should be grayscale)
+            headshot_img = self._to_grayscale_preserve_alpha(headshot_img)
             # Process headshot (background removal already done in PIL code)
             headshot_img.save(headshot_bytes, format='PNG', optimize=False)
             headshot_bytes.seek(0)
@@ -1909,10 +2003,10 @@ class HTMLSlideGenerator:
             # headshot_area_x = map_area_x + (map_width - headshot_area_width) // 2 - 50
             # headshot_area_y = map_area_y + map_height - 50
             # Headshot target box (tuned to match reference slide)
-            headshot_area_width_px = 820
-            headshot_area_height_px = 900
-            headshot_area_x_px = map_area_x + (map_width - headshot_area_width_px) // 2 + 20
-            headshot_area_y_px = map_area_y + int(map_height * 0.46)
+            headshot_area_width_px = 600
+            headshot_area_height_px = 600
+            headshot_area_x_px = map_area_x + (map_width - headshot_area_width_px) // 2 - 100  # Moved left (was +20)
+            headshot_area_y_px = map_area_y + int(map_height * 0.85)  # Lowered more (was 0.75)
             
             slide_pptx.shapes.add_picture(
                 headshot_bytes,
