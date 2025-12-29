@@ -1535,8 +1535,8 @@ class HTMLSlideGenerator:
                 print("   REMOVEBG_API_KEY not set, using manual background removal" if not use_api_removal else "   Using remove.bg API when available")
 
                 # Headshot target box (smaller to not cover map)
-                headshot_area_width = 400   # Reduced from 600 to avoid covering map
-                headshot_area_height = 400   # Keep square
+                headshot_area_width = 500   # Reduced from 600 to avoid covering map
+                headshot_area_height = 500   # Keep square
                 
                 # Position below the map, not overlapping
                 headshot_area_x = map_area_x + (map_width - headshot_area_width) // 2 - 50  # Centered under map, slightly left
@@ -1552,10 +1552,10 @@ class HTMLSlideGenerator:
                         if max(original.size) > 1500:
                             original.thumbnail((1500, 1500), Image.Resampling.LANCZOS)
                         
-                        # --- HELPER: CIRCULAR CROP FALLBACK ---
-                        # If BG removal fails, we use this to make a nice circle instead of a square
-                        def make_circular(img_in):
-                            print("    Applying Circular Crop Fallback...")
+                        # --- HELPER: MAP BACKGROUND FALLBACK ---
+                        # If BG removal fails, composite person on top of map to simulate transparency
+                        def make_map_background(img_in):
+                            print("    Applying Map Background Fallback...")
                             # 1. Create a square canvas based on smallest dimension
                             w, h = img_in.size
                             d = min(w, h)
@@ -1564,38 +1564,65 @@ class HTMLSlideGenerator:
                             top = (h - d) // 2
                             img_sq = img_in.crop((left, top, left + d, top + d))
                             
-                            # 2. Create circular mask
-                            mask = Image.new('L', (d, d), 0)
-                            draw_mask = ImageDraw.Draw(mask)
-                            draw_mask.ellipse((0, 0, d, d), fill=255)
+                            # 2. Load map image as background (or create dark map-like background)
+                            if map_path and os.path.exists(map_path):
+                                try:
+                                    map_bg = Image.open(map_path).convert("RGBA")
+                                    # Resize map to match headshot size, maintaining aspect ratio and cropping
+                                    map_bg.thumbnail((d, d), Image.Resampling.LANCZOS)
+                                    # If thumbnail made it smaller, center it on a d x d canvas
+                                    if map_bg.size != (d, d):
+                                        map_canvas = Image.new("RGBA", (d, d), (42, 42, 42, 255))
+                                        paste_x = (d - map_bg.width) // 2
+                                        paste_y = (d - map_bg.height) // 2
+                                        map_canvas.paste(map_bg, (paste_x, paste_y), map_bg)
+                                        map_bg = map_canvas
+                                    print(f"    Using map image as background: {map_path}")
+                                except Exception as e:
+                                    print(f"    Warning: Could not load map image: {e}, using dark background")
+                                    # Fallback: create dark gray map-like background
+                                    map_bg = Image.new("RGBA", (d, d), (42, 42, 42, 255))  # Dark gray #2a2a2a
+                            else:
+                                # Create dark gray map-like background if no map available
+                                map_bg = Image.new("RGBA", (d, d), (42, 42, 42, 255))  # Dark gray #2a2a2a
+                                print("    No map available, using dark background")
                             
-                            # 3. Apply mask
-                            img_sq.putalpha(mask)
+                            # 3. Convert person to grayscale and make it RGBA
+                            person_gray = img_sq.convert("L")
+                            # Create RGBA version with fully opaque alpha (person is fully visible)
+                            person_rgba = Image.merge("RGBA", (person_gray, person_gray, person_gray, Image.new("L", (d, d), 255)))
                             
-                            # 4. Grayscale it to match style
-                            gray = img_sq.convert("L")
-                            return Image.merge("RGBA", (gray, gray, gray, mask))
+                            # 4. Composite person on top of map (person is opaque, map shows as background)
+                            # This simulates transparency because the map matches the slide's map background
+                            result = Image.alpha_composite(map_bg, person_rgba)
+                            
+                            # 5. Convert entire result to grayscale to match slide style
+                            result_gray = result.convert("L")
+                            # Keep fully opaque alpha so person is visible
+                            alpha = Image.new("L", (d, d), 255)
+                            
+                            return Image.merge("RGBA", (result_gray, result_gray, result_gray, alpha))
 
                         # 1) Attempt Background Removal
                         img = self._remove_bg_best_effort(path, use_api=use_api_removal)
                         
                         # Check if background removal returned None
                         if img is None:
-                            print(f"    WARNING: Background removal returned None. Using Circle.")
-                            return make_circular(original)
+                            print(f"    WARNING: Background removal returned None. Using Map Background.")
+                            return make_map_background(original)
 
                         # 2) SAFETY CHECK 1: Did we wipe the image? 
                         # If opacity is < 10%, we deleted too much of the person. Use Circular Fallback.
                         opaque_frac, transp_frac, mean_alpha = self._alpha_stats(img)
                         print(f"    After BG removal: opaque={opaque_frac:.2f}, transp={transp_frac:.2f}, meanA={mean_alpha:.0f}")
                         if opaque_frac < 0.10: 
-                            print(f"    WARNING: BG removal wiped image (opaque={opaque_frac:.2f}). Using Circle.")
-                            return make_circular(original)
+                            print(f"    WARNING: BG removal wiped image (opaque={opaque_frac:.2f}). Using Map Background.")
+                            return make_map_background(original)
                         
                         # 2b) SAFETY CHECK: If we removed too much (>50% of image), that's suspicious
                         if opaque_frac < 0.50:
-                            print(f"    WARNING: Only {opaque_frac:.1%} of image remains - may have removed too much. Using Circle.")
-                            return make_circular(original)
+                            print(f"    WARNING: Only {opaque_frac:.1%} of image remains - may have removed too much. Using Map Background.")
+                            return make_map_background(original)
 
                         # 3) Only clean up mask if rembg didn't work well (low transparency)
                         # If rembg already gave us good transparency, skip _fix_alpha_mask to avoid wiping it
@@ -1619,8 +1646,8 @@ class HTMLSlideGenerator:
                         # 4) Final safety check before processing
                         final_check_o, final_check_t, _ = self._alpha_stats(img)
                         if final_check_o < 0.05:
-                            print(f"    WARNING: Image has no subject (opaque={final_check_o:.2f}). Using Circle.")
-                            return make_circular(original)
+                            print(f"    WARNING: Image has no subject (opaque={final_check_o:.2f}). Using Map Background.")
+                            return make_map_background(original)
 
                         # 5) Standard Processing (Grayscale + Edges)
                         img = self._to_grayscale_preserve_alpha(img)
@@ -1630,8 +1657,8 @@ class HTMLSlideGenerator:
                         final_o, final_t, final_ma = self._alpha_stats(img)
                         print(f"    Final headshot stats: opaque={final_o:.2f}, transp={final_t:.2f}, meanA={final_ma:.0f}")
                         if final_o < 0.05:
-                            print(f"    WARNING: Final image has no subject (opaque={final_o:.2f}). Using Circle.")
-                            return make_circular(original)
+                            print(f"    WARNING: Final image has no subject (opaque={final_o:.2f}). Using Map Background.")
+                            return make_map_background(original)
 
                         return img
 
@@ -1639,24 +1666,10 @@ class HTMLSlideGenerator:
                         print(f"Warning: failed headshot {path}: {e}")
                         import traceback
                         traceback.print_exc()
-                        # Final safety: Return original but circular
+                        # Final safety: Return original with map background
                         try:
                             orig = Image.open(path).convert("RGBA")
-                            # Define make_circular here too for the exception handler
-                            def make_circular(img_in):
-                                print("    Applying Circular Crop Fallback...")
-                                w, h = img_in.size
-                                d = min(w, h)
-                                left = (w - d) // 2
-                                top = (h - d) // 2
-                                img_sq = img_in.crop((left, top, left + d, top + d))
-                                mask = Image.new('L', (d, d), 0)
-                                draw_mask = ImageDraw.Draw(mask)
-                                draw_mask.ellipse((0, 0, d, d), fill=255)
-                                img_sq.putalpha(mask)
-                                gray = img_sq.convert("L")
-                                return Image.merge("RGBA", (gray, gray, gray, mask))
-                            return make_circular(orig)
+                            return make_map_background(orig)
                         except:
                             return None
 
@@ -2073,8 +2086,8 @@ class HTMLSlideGenerator:
             # headshot_area_x = map_area_x + (map_width - headshot_area_width) // 2 - 50
             # headshot_area_y = map_area_y + map_height - 50
             # Headshot target box (smaller to not cover map)
-            headshot_area_width_px = 400
-            headshot_area_height_px = 400
+            headshot_area_width_px = 500
+            headshot_area_height_px = 500
             headshot_area_x_px = map_area_x + (map_width - headshot_area_width_px) // 2 - 50  # Centered under map, slightly left
             headshot_area_y_px = map_area_y + map_height + 30  # Position below map with gap
             
