@@ -1557,16 +1557,28 @@ class HTMLSlideGenerator:
                         # Try to get map from slide if map_path is not available
                         def get_map_for_background():
                             """Try to get map image from various sources."""
-                            # First, try map_path if available
+                            # First, try bundled map background image (committed to repo)
+                            script_dir = os.path.dirname(os.path.abspath(__file__))
+                            bundled_map_paths = [
+                                os.path.join(script_dir, "assets", "map_background.png"),
+                                os.path.join(script_dir, "map_background.png"),
+                                os.path.join(os.path.dirname(script_dir), "assets", "map_background.png"),
+                            ]
+                            for bundled_path in bundled_map_paths:
+                                if os.path.exists(bundled_path):
+                                    try:
+                                        print(f"    Using bundled map background: {bundled_path}")
+                                        return Image.open(bundled_path).convert("RGBA")
+                                    except Exception as e:
+                                        print(f"    Warning: Could not load bundled map: {e}")
+                                        continue
+                            
+                            # Second, try map_path if available
                             if map_path and os.path.exists(map_path):
                                 try:
                                     return Image.open(map_path).convert("RGBA")
                                 except Exception as e:
                                     print(f"    Warning: Could not load map from map_path: {e}")
-                            
-                            # Second, try to extract map from slide (if slide exists)
-                            # This requires the slide to be partially rendered, so we'll try to get it from the template
-                            # Actually, we can't do this easily without the slide being rendered
                             
                             # Third, try common temp locations
                             import tempfile
