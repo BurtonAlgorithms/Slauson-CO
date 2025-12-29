@@ -1565,9 +1565,15 @@ class HTMLSlideGenerator:
                             img_sq = img_in.crop((left, top, left + d, top + d))
                             
                             # 2. Load map image as background (or create dark map-like background)
+                            print(f"    DEBUG: map_path = {map_path}")
+                            if map_path:
+                                print(f"    DEBUG: map_path exists check: {os.path.exists(map_path) if map_path else False}")
+                            
                             if map_path and os.path.exists(map_path):
                                 try:
+                                    print(f"    Loading map image from: {map_path}")
                                     map_bg = Image.open(map_path).convert("RGBA")
+                                    print(f"    Map image loaded: size={map_bg.size}, mode={map_bg.mode}")
                                     # Resize map to match headshot size, maintaining aspect ratio and cropping
                                     map_bg.thumbnail((d, d), Image.Resampling.LANCZOS)
                                     # If thumbnail made it smaller, center it on a d x d canvas
@@ -1577,15 +1583,20 @@ class HTMLSlideGenerator:
                                         paste_y = (d - map_bg.height) // 2
                                         map_canvas.paste(map_bg, (paste_x, paste_y), map_bg)
                                         map_bg = map_canvas
-                                    print(f"    Using map image as background: {map_path}")
+                                    print(f"    ✓ Using map image as background: {map_path}")
                                 except Exception as e:
-                                    print(f"    Warning: Could not load map image: {e}, using dark background")
+                                    print(f"    ⚠️  Warning: Could not load map image: {e}")
+                                    import traceback
+                                    traceback.print_exc()
                                     # Fallback: create dark gray map-like background
                                     map_bg = Image.new("RGBA", (d, d), (42, 42, 42, 255))  # Dark gray #2a2a2a
                             else:
                                 # Create dark gray map-like background if no map available
                                 map_bg = Image.new("RGBA", (d, d), (42, 42, 42, 255))  # Dark gray #2a2a2a
-                                print("    No map available, using dark background")
+                                if not map_path:
+                                    print(f"    ⚠️  No map_path provided (map_path is None)")
+                                else:
+                                    print(f"    ⚠️  Map file does not exist: {map_path}")
                             
                             # 3. Convert person to grayscale and make it RGBA
                             person_gray = img_sq.convert("L")
