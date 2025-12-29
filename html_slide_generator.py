@@ -360,8 +360,8 @@ class HTMLSlideGenerator:
 
             return bg_mask
 
-        # Very aggressive tolerance range for studio backgrounds (gray walls, white walls, etc.)
-        tol_candidates = [20, 30, 40, 50, 60, 70]
+        # Conservative tolerance range - preserve subject, only remove clear background
+        tol_candidates = [10, 15, 20, 25, 30, 35]
         best_mask = None
         best_score = None
         best_t = tol_candidates[0]
@@ -369,15 +369,34 @@ class HTMLSlideGenerator:
         for t in tol_candidates:
             mask = flood(t)
             removed = mask.mean()
-            score = abs(removed - 0.40)  # target ~40% removal (very aggressive)
+            # Target 20-25% removal (conservative to preserve subject)
+            # Prefer lower removal to avoid cutting into the person
+            target_removal = 0.22
+            score = abs(removed - target_removal)
             if best_score is None or score < best_score:
                 best_score = score
                 best_mask = mask
                 best_t = t
-            if 0.20 <= removed <= 0.65:
+            # Stop if we get reasonable removal (15-30% is safe)
+            if 0.15 <= removed <= 0.30:
                 break
 
-        print(f"   Gray BG removal: tol={best_t}, removed={best_mask.mean():.1%}")
+        removed_frac = best_mask.mean()
+        print(f"   Gray BG removal: tol={best_t}, removed={removed_frac:.1%}")
+        
+        # Safety check: if we removed too much (>35%), use a more conservative mask
+        if removed_frac > 0.35:
+            print(f"   WARNING: Removed too much ({removed_frac:.1%}), trying more conservative tolerance...")
+            # Try with lower tolerance
+            for t in [5, 8, 10, 12]:
+                mask = flood(t)
+                removed = mask.mean()
+                if 0.10 <= removed <= 0.30:
+                    best_mask = mask
+                    best_t = t
+                    removed_frac = removed
+                    print(f"   Using more conservative tolerance: tol={best_t}, removed={removed_frac:.1%}")
+                    break
 
         new_alpha = alpha.copy()
         new_alpha[best_mask] = 0
@@ -1536,11 +1555,16 @@ class HTMLSlideGenerator:
                             return make_circular(original)
 
                         # 2) SAFETY CHECK 1: Did we wipe the image? 
-                        # If opacity is < 5%, we deleted the person. Use Circular Fallback.
+                        # If opacity is < 10%, we deleted too much of the person. Use Circular Fallback.
                         opaque_frac, transp_frac, mean_alpha = self._alpha_stats(img)
                         print(f"    After BG removal: opaque={opaque_frac:.2f}, transp={transp_frac:.2f}, meanA={mean_alpha:.0f}")
-                        if opaque_frac < 0.05: 
+                        if opaque_frac < 0.10: 
                             print(f"    WARNING: BG removal wiped image (opaque={opaque_frac:.2f}). Using Circle.")
+                            return make_circular(original)
+                        
+                        # 2b) SAFETY CHECK: If we removed too much (>50% of image), that's suspicious
+                        if opaque_frac < 0.50:
+                            print(f"    WARNING: Only {opaque_frac:.1%} of image remains - may have removed too much. Using Circle.")
                             return make_circular(original)
 
                         # 3) Only clean up mask if rembg didn't work well (low transparency)
