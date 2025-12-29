@@ -20,5 +20,6 @@ pdf2image>=1.16.0  # For PDF template support (requires poppler-utils system pac
 numpy>=1.26.0  # For image manipulation and transparency
 geopy>=2.4.0  # For city geocoding (lat/lon lookup)
 rembg[new]>=2.0.0  # For local AI background removal (U²-Net) - fallback when REMOVEBG_API_KEY not set
+onnxruntime>=1.18.0  # Required for rembg to work (CPU version for Render)
 # weasyprint>=60.0  # Optional - requires system libraries
 
