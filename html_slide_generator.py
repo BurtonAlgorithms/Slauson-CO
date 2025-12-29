@@ -1597,7 +1597,7 @@ class HTMLSlideGenerator:
                             return None
                         
                         def make_map_background(img_in):
-                            print("    Applying Map Background Fallback...")
+                            print("    Applying Transparent Background Fallback...")
                             # 1. Create a square canvas based on smallest dimension
                             w, h = img_in.size
                             d = min(w, h)
@@ -1606,52 +1606,104 @@ class HTMLSlideGenerator:
                             top = (h - d) // 2
                             img_sq = img_in.crop((left, top, left + d, top + d))
                             
-                            # 2. Load map image as background (or create dark map-like background)
-                            map_source_img = get_map_for_background()
-                            
-                            if map_source_img:
-                                try:
-                                    print(f"    ✓ Found map image, using as background")
-                                    # Resize map to match headshot size, maintaining aspect ratio and cropping
-                                    map_bg = map_source_img.copy()
-                                    map_bg.thumbnail((d, d), Image.Resampling.LANCZOS)
-                                    # If thumbnail made it smaller, center it on a d x d canvas
-                                    if map_bg.size != (d, d):
-                                        map_canvas = Image.new("RGBA", (d, d), (42, 42, 42, 255))
-                                        paste_x = (d - map_bg.width) // 2
-                                        paste_y = (d - map_bg.height) // 2
-                                        map_canvas.paste(map_bg, (paste_x, paste_y), map_bg)
-                                        map_bg = map_canvas
-                                    print(f"    ✓ Map background prepared: size={map_bg.size}")
-                                except Exception as e:
-                                    print(f"    ⚠️  Warning: Could not process map image: {e}")
-                                    import traceback
-                                    traceback.print_exc()
-                                    # Fallback: create dark gray map-like background
-                                    map_bg = Image.new("RGBA", (d, d), (42, 42, 42, 255))  # Dark gray #2a2a2a
-                            else:
-                                # Create dark gray map-like background if no map available
-                                map_bg = Image.new("RGBA", (d, d), (42, 42, 42, 255))  # Dark gray #2a2a2a
-                                print(f"    ⚠️  No map image found, using dark background")
-                                print(f"    DEBUG: map_path = {map_path}")
-                                if map_path:
-                                    print(f"    DEBUG: map_path exists = {os.path.exists(map_path)}")
-                            
-                            # 3. Convert person to grayscale and make it RGBA
-                            person_gray = img_sq.convert("L")
-                            # Create RGBA version with fully opaque alpha (person is fully visible)
-                            person_rgba = Image.merge("RGBA", (person_gray, person_gray, person_gray, Image.new("L", (d, d), 255)))
-                            
-                            # 4. Composite person on top of map (person is opaque, map shows as background)
-                            # This simulates transparency because the map matches the slide's map background
-                            result = Image.alpha_composite(map_bg, person_rgba)
-                            
-                            # 5. Convert entire result to grayscale to match slide style
-                            result_gray = result.convert("L")
-                            # Keep fully opaque alpha so person is visible
-                            alpha = Image.new("L", (d, d), 255)
-                            
-                            return Image.merge("RGBA", (result_gray, result_gray, result_gray, alpha))
+                            # 2. Try aggressive background removal with very conservative settings
+                            # Use the gray flood-fill with very low tolerance to only remove obvious background
+                            try:
+                                import numpy as np
+                                img_rgba = img_sq.convert("RGBA")
+                                arr = np.array(img_rgba)
+                                H, W = arr.shape[:2]
+                                
+                                # Luminance
+                                lum = (0.299 * arr[..., 0] + 0.587 * arr[..., 1] + 0.114 * arr[..., 2]).astype(np.float32)
+                                alpha = arr[..., 3].astype(np.uint8)
+                                
+                                # Border samples for background color
+                                bs = max(8, min(H, W) // 25)
+                                border = np.concatenate([
+                                    lum[:bs, :].ravel(),
+                                    lum[-bs:, :].ravel(),
+                                    lum[:, :bs].ravel(),
+                                    lum[:, -bs:].ravel(),
+                                ])
+                                bg = np.median(border)
+                                dist = np.abs(lum - bg)
+                                
+                                # Very conservative flood-fill - only remove pixels very close to border color
+                                # Protect center 70% of image
+                                center_y_start = int(H * 0.15)
+                                center_y_end = int(H * 0.85)
+                                center_x_start = int(W * 0.15)
+                                center_x_end = int(W * 0.85)
+                                center_protection = np.zeros((H, W), dtype=bool)
+                                center_protection[center_y_start:center_y_end, center_x_start:center_x_end] = True
+                                
+                                from collections import deque
+                                def flood(t):
+                                    close = dist <= t
+                                    bg_mask = np.zeros((H, W), dtype=bool)
+                                    q = deque()
+                                    
+                                    def push(y, x):
+                                        if center_protection[y, x]:
+                                            return
+                                        if 0 <= y < H and 0 <= x < W and close[y, x] and not bg_mask[y, x]:
+                                            bg_mask[y, x] = True
+                                            q.append((y, x))
+                                    
+                                    for x in range(W):
+                                        push(0, x); push(H - 1, x)
+                                    for y in range(H):
+                                        push(y, 0); push(y, W - 1)
+                                    
+                                    while q:
+                                        y, x = q.popleft()
+                                        for dy in (-1, 0, 1):
+                                            for dx in (-1, 0, 1):
+                                                if dy == 0 and dx == 0:
+                                                    continue
+                                                push(y + dy, x + dx)
+                                    
+                                    return bg_mask
+                                
+                                # Try very low tolerance (3-8) to only remove obvious background
+                                best_mask = None
+                                for t in [3, 5, 8]:
+                                    mask = flood(t)
+                                    removed = mask.mean()
+                                    if 0.05 <= removed <= 0.25:  # Only remove 5-25% (very conservative)
+                                        best_mask = mask
+                                        print(f"    ✓ Conservative background removal: tol={t}, removed={removed:.1%}")
+                                        break
+                                
+                                if best_mask is None:
+                                    # Use the most conservative mask
+                                    best_mask = flood(3)
+                                
+                                # Apply mask to alpha channel
+                                new_alpha = alpha.copy()
+                                new_alpha[best_mask] = 0
+                                
+                                # Create result with transparent background
+                                result = arr.copy()
+                                result[..., 3] = new_alpha
+                                result_img = Image.fromarray(result, "RGBA")
+                                
+                                # Convert to grayscale while preserving alpha
+                                result_gray = result_img.convert("L")
+                                alpha_channel = result_img.split()[3]
+                                
+                                return Image.merge("RGBA", (result_gray, result_gray, result_gray, alpha_channel))
+                                
+                            except Exception as e:
+                                print(f"    ⚠️  Advanced removal failed: {e}, using circular crop with transparent background")
+                                # Fallback: circular crop with transparent background
+                                mask = Image.new('L', (d, d), 0)
+                                draw_mask = ImageDraw.Draw(mask)
+                                draw_mask.ellipse((0, 0, d, d), fill=255)
+                                img_sq.putalpha(mask)
+                                gray = img_sq.convert("L")
+                                return Image.merge("RGBA", (gray, gray, gray, mask))
 
                         # 1) Attempt Background Removal
                         img = self._remove_bg_best_effort(path, use_api=use_api_removal)
