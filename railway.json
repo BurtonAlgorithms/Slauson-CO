@@ -4,7 +4,7 @@
     "builder": "NIXPACKS"
   },
   "deploy": {
-    "startCommand": "gunicorn --bind 0.0.0.0:$PORT webhook_listener:app",
+    "startCommand": "gunicorn webhook_listener:app --bind 0.0.0.0:$PORT --timeout 120 --workers 2",
     "restartPolicyType": "ON_FAILURE",
     "restartPolicyMaxRetries": 10
   }
