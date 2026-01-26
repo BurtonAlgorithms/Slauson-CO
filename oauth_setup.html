@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OAuth Setup - Start Here</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        .container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            max-width: 600px;
+            width: 100%;
+            padding: 40px;
+            text-align: center;
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 20px;
+            font-size: 32px;
+        }
+        .status {
+            padding: 20px;
+            border-radius: 12px;
+            margin: 20px 0;
+            font-size: 18px;
+        }
+        .status.checking {
+            background: #fff3cd;
+            color: #856404;
+        }
+        .status.ready {
+            background: #d4edda;
+            color: #155724;
+        }
+        .status.not-ready {
+            background: #f8d7da;
+            color: #721c24;
+        }
+        .btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 20px 40px;
+            border-radius: 12px;
+            font-size: 20px;
+            font-weight: bold;
+            cursor: pointer;
+            width: 100%;
+            margin: 20px 0;
+            text-decoration: none;
+            display: inline-block;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(0,0,0,0.2);
+        }
+        .btn:active {
+            transform: translateY(0);
+        }
+        .instructions {
+            background: #f8f9fa;
+            border-radius: 12px;
+            padding: 30px;
+            margin: 20px 0;
+            text-align: left;
+            border-left: 4px solid #667eea;
+        }
+        .instructions h2 {
+            color: #333;
+            margin-bottom: 15px;
+            font-size: 20px;
+        }
+        .instructions ol {
+            margin-left: 20px;
+            line-height: 2;
+        }
+        .instructions code {
+            background: #e9ecef;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+        }
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #667eea;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 20px auto;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .hidden { display: none; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔐 OAuth Setup</h1>
+        <p style="color: #666; margin-bottom: 30px;">Easy setup for Google Drive and Canva</p>
+        
+        <div id="status-checking" class="status checking">
+            <div class="spinner"></div>
+            <p>Checking if setup server is running...</p>
+        </div>
+        
+        <div id="status-ready" class="status ready hidden">
+            ✅ Setup server is running!
+            <br><br>
+            <a href="http://localhost:8080" class="btn" target="_blank">Open Setup Interface →</a>
+        </div>
+        
+        <div id="status-not-ready" class="status not-ready hidden">
+            ⚠️ Setup server is not running yet.
+            <br><br>
+            <div class="instructions">
+                <h2>How to Start:</h2>
+                <ol>
+                    <li><strong>Option 1 (Easiest):</strong> Double-click <code>start_oauth_setup.command</code> (Mac) or <code>start_oauth_setup.bat</code> (Windows)</li>
+                    <li><strong>Option 2:</strong> Open terminal and run:
+                        <br><code style="display: block; margin: 10px 0; padding: 10px; background: #e9ecef;">python3 oauth_setup_web.py</code>
+                    </li>
+                    <li>Wait for browser to open automatically, or come back here and click the button above</li>
+                </ol>
+            </div>
+            <button class="btn" onclick="checkServer()">Check Again</button>
+        </div>
+        
+        <div class="instructions" style="margin-top: 30px;">
+            <h2>📝 What You'll Need:</h2>
+            <ul style="margin-left: 20px; line-height: 2;">
+                <li>Google Cloud Console account (free)</li>
+                <li>Canva account (free or Pro)</li>
+                <li>Your OAuth credentials (instructions provided in setup interface)</li>
+            </ul>
+        </div>
+    </div>
+    
+    <script>
+        function checkServer() {
+            document.getElementById('status-checking').classList.remove('hidden');
+            document.getElementById('status-ready').classList.add('hidden');
+            document.getElementById('status-not-ready').classList.add('hidden');
+            
+            fetch('http://localhost:8080/api/status', { mode: 'no-cors' })
+                .then(() => {
+                    document.getElementById('status-checking').classList.add('hidden');
+                    document.getElementById('status-ready').classList.remove('hidden');
+                })
+                .catch(() => {
+                    document.getElementById('status-checking').classList.add('hidden');
+                    document.getElementById('status-not-ready').classList.remove('hidden');
+                });
+        }
+        
+        // Check on load
+        checkServer();
+        
+        // Auto-check every 3 seconds
+        setInterval(checkServer, 3000);
+    </script>
+</body>
+</html>
+

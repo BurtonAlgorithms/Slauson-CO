@@ -1,11 +1,21 @@
+# Virtual environments
+venv_oauth/
+venv/
+.venv/
+env/
+
+# OAuth tokens and credentials
+token.json
+canva_tokens.json
+credentials.json
+.canva_pkce.json
+.oauth_flow.json
+.canva_server.json
+
 # Environment variables
 .env
+.env.local
 .env.bak
-
-# Secrets and credentials
-token.json
-credentials.json
-canva_tokens.json
 
 # Python
 __pycache__/
@@ -13,38 +23,19 @@ __pycache__/
 *$py.class
 *.so
 .Python
-env/
-venv/
-ENV/
-build/
-dist/
-*.egg-info/
 
 # IDE
 .vscode/
 .idea/
 *.swp
 *.swo
-
-# Temporary files
-*.tmp
-temp/
-tmp/
-*.log
-
-# Test files
-examples/
-test_images/
-
-# Generated files
-*.pdf
-*.png
-*.jpg
-!examples/*.jpg
-!examples/*.png
-!templates/*.pdf  # Allow template PDFs in templates directory
-!SLAUSON&CO.Template.pdf  # Allow template PDF in project root
+*~
 
 # OS
 .DS_Store
 Thumbs.db
+
+# Local backups / certs
+*.old
+*.bak
+oauth_cacert.pem

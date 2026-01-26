@@ -31,11 +31,8 @@ CANVA_TOKEN_URLS = [
 ]
 CANVA_TOKEN_URL = CANVA_TOKEN_URLS[0]  # Start with REST API endpoint
 # IMPORTANT: This redirect URI must match EXACTLY what you configured in your Canva app
-# Common options:
-# - http://localhost:8080/callback
-# - http://127.0.0.1:8080/callback
-# - http://localhost:3001/oauth/redirect (if you configured this in Canva)
-REDIRECT_URI = os.getenv("CANVA_REDIRECT_URI", "http://127.0.0.1:3001/oauth/redirect")  # Change this to match your Canva app settings
+# Use a non-localhost URL by default and set CANVA_REDIRECT_URI to your public callback URL.
+REDIRECT_URI = os.getenv("CANVA_REDIRECT_URI", "https://oauth.example.com/canva/callback")
 SCOPES = [
     "design:content:read",
     "design:content:write",
@@ -63,11 +60,12 @@ def generate_pkce():
     return code_verifier, code_challenge
 
 
-def get_authorization_url(client_id: str, code_challenge: str) -> str:
+def get_authorization_url(client_id: str, code_challenge: str, redirect_uri: str = None) -> str:
     """Generate the authorization URL."""
+    redirect_uri_to_use = redirect_uri or REDIRECT_URI
     params = {
         "client_id": client_id,
-        "redirect_uri": REDIRECT_URI,
+        "redirect_uri": redirect_uri_to_use,
         "response_type": "code",
         "scope": " ".join(SCOPES),
         "code_challenge": code_challenge,
@@ -201,18 +199,119 @@ def save_tokens(tokens: dict):
     print(f"✓ Tokens saved to {TOKEN_FILE}")
 
 
+def print_header():
+    """Print setup header."""
+    print("=" * 70)
+    print("🔐 Canva OAuth Setup")
+    print("=" * 70)
+    print()
+
+def print_instructions():
+    """Print detailed setup instructions."""
+    print("📋 SETUP INSTRUCTIONS")
+    print("-" * 70)
+    print()
+    print("To set up Canva OAuth, you need to create a Canva app and get credentials.")
+    print()
+    print("Step 1: Create a Canva App")
+    print("   → Go to: https://www.canva.com/developers/")
+    print("   → Sign in with your Canva account")
+    print("   → Click 'Create an app'")
+    print("   → Fill in app name and details")
+    print()
+    print("Step 2: Configure OAuth Settings")
+    print("   → In your app dashboard, go to 'OAuth' or 'Authentication'")
+    print("   → Add redirect URI: https://oauth.example.com/canva/callback")
+    print("   → Note your Client ID (starts with OC-) and Client Secret")
+    print()
+    print("Step 3: Add to .env file")
+    print("   → Create or edit .env file in this directory")
+    print("   → Add these lines:")
+    print("     CANVA_CLIENT_ID=OC-XXXXXXXXXXXXX")
+    print("     CANVA_CLIENT_SECRET=your_client_secret_here")
+    print("     CANVA_REDIRECT_URI=https://oauth.example.com/canva/callback")
+    print()
+    print("For detailed instructions, see: OAUTH_SETUP_GUIDE.md")
+    print()
+    print("=" * 70)
+    print()
+
+def check_existing_tokens():
+    """Check if we already have valid tokens."""
+    if os.path.exists(TOKEN_FILE):
+        try:
+            import json
+            with open(TOKEN_FILE, 'r') as f:
+                tokens = json.load(f)
+            
+            if tokens.get('access_token') and tokens.get('refresh_token'):
+                print("✅ Found existing tokens!")
+                print(f"   Token file: {TOKEN_FILE}")
+                print()
+                
+                response = input("Do you want to re-authorize? (y/N): ").strip().lower()
+                if response != 'y':
+                    print("✅ Using existing tokens. Setup complete!")
+                    return True
+        except Exception as e:
+            print(f"⚠️  Warning: Error reading existing tokens: {e}")
+            print()
+    
+    return False
+
 def setup_oauth():
     """Main OAuth setup function."""
+    print_header()
+    
+    # Check for existing tokens
+    if check_existing_tokens():
+        return True
+    
+    # Check for credentials in .env
     client_id = Config.CANVA_CLIENT_ID
     client_secret = Config.CANVA_CLIENT_SECRET
+    redirect_uri = os.getenv("CANVA_REDIRECT_URI", REDIRECT_URI)
     
     if not client_id or not client_secret:
+        print_instructions()
         print("❌ Error: CANVA_CLIENT_ID and CANVA_CLIENT_SECRET must be set in .env")
+        print()
+        print("Please follow the instructions above to set up your .env file.")
+        print()
+        
+        # Check if .env exists
+        if not os.path.exists('.env'):
+            print("💡 Tip: Create a .env file in this directory with:")
+            print("   CANVA_CLIENT_ID=OC-XXXXXXXXXXXXX")
+            print("   CANVA_CLIENT_SECRET=your_secret_here")
+            print("   CANVA_REDIRECT_URI=https://oauth.example.com/canva/callback")
+            print()
+        
+        # Offer to open the guide
+        response = input("Would you like to see the full setup guide? (Y/n): ").strip().lower()
+        if response != 'n':
+            guide_path = os.path.join(os.path.dirname(__file__), 'OAUTH_SETUP_GUIDE.md')
+            if os.path.exists(guide_path):
+                print(f"\n📖 Opening guide: {guide_path}")
+                try:
+                    import subprocess
+                    import platform
+                    if platform.system() == 'Darwin':  # macOS
+                        subprocess.run(['open', guide_path])
+                    elif platform.system() == 'Windows':
+                        subprocess.run(['start', guide_path], shell=True)
+                    else:  # Linux
+                        subprocess.run(['xdg-open', guide_path])
+                except:
+                    print(f"   Please open manually: {guide_path}")
+            else:
+                print("   Guide not found. Please see the instructions above.")
+        
         return False
     
-    print("=" * 60)
-    print("🔐 Canva OAuth Setup")
-    print("=" * 60)
+    print("✅ Found Canva credentials in .env")
+    print(f"   Client ID: {client_id[:20]}...")
+    print(f"   Redirect URI: {redirect_uri}")
     print()
     print("This will:")
     print("1. Open a browser for you to log in to Canva")
@@ -224,34 +323,77 @@ def setup_oauth():
     code_verifier, code_challenge = generate_pkce()
     print("✓ Generated PKCE code challenge")
     
-    # Get authorization URL
-    auth_url = get_authorization_url(client_id, code_challenge)
+    # Get authorization URL (use redirect URI from env if set)
+    redirect_uri_to_use = os.getenv("CANVA_REDIRECT_URI", REDIRECT_URI)
+    
+    auth_url = get_authorization_url(client_id, code_challenge, redirect_uri_to_use)
     print(f"✓ Generated authorization URL")
+    print(f"   Using redirect URI: {redirect_uri_to_use}")
     print()
     
-    # Parse redirect URI to get port
+    # Parse redirect URI to get port/host for local callback
     from urllib.parse import urlparse
-    parsed_uri = urlparse(REDIRECT_URI)
+    parsed_uri = urlparse(redirect_uri_to_use)
+    host = parsed_uri.hostname or ""
     port = parsed_uri.port
+
+    # This script runs a local callback server. If redirect URI is not local,
+    # tell the user to use the web UI or set a localhost redirect.
+    if host not in ("localhost", "127.0.0.1"):
+        print("❌ Redirect URI is not local.")
+        print(f"   Current CANVA_REDIRECT_URI: {redirect_uri_to_use}")
+        print("   This script can only receive callbacks on localhost.")
+        print("   Fix: set CANVA_REDIRECT_URI to a localhost URL and try again:")
+        print("     CANVA_REDIRECT_URI=http://127.0.0.1:3001/oauth/redirect")
+        print("   Or use the web UI/hosted OAuth flow for non-local URLs.")
+        return False
+
     if not port:
         # Default port if not specified
-        port = 8080
+        port = 3001
+    
+    # Check if port is available
+    import socket
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    port_in_use = sock.connect_ex(('127.0.0.1', port)) == 0
+    sock.close()
+    
+    if port_in_use:
+        print(f"⚠️  Warning: Port {port} is already in use.")
+        print(f"   Make sure no other application is using this port.")
+        print(f"   Or change CANVA_REDIRECT_URI in .env to use a different port.")
+        print()
+        response = input("Continue anyway? (y/N): ").strip().lower()
+        if response != 'y':
+            return False
     
     # Start local server to receive callback
     import queue
     code_queue = queue.Queue()
     
     handler = lambda *args, **kwargs: OAuthCallbackHandler(*args, code_queue=code_queue, **kwargs)
-    httpd = socketserver.TCPServer(("", port), handler)
+    try:
+        httpd = socketserver.TCPServer(("", port), handler)
+    except OSError as e:
+        print(f"❌ Error: Could not start server on port {port}: {e}")
+        print(f"   Port may be in use. Try changing CANVA_REDIRECT_URI in .env")
+        return False
     
     print("🌐 Opening browser for Canva login...")
-    print(f"   URL: {auth_url[:80]}...")
+    print(f"   URL: {auth_url[:100]}...")
     print()
-    webbrowser.open(auth_url)
-    
     print("⏳ Waiting for authorization...")
-    print("   (Please log in to Canva in the browser)")
+    print("   (Please log in to Canva in the browser and click 'Allow')")
+    print("   (You can close this window after authorization)")
     print()
+    
+    try:
+        webbrowser.open(auth_url)
+    except Exception as e:
+        print(f"⚠️  Could not open browser automatically: {e}")
+        print(f"   Please open this URL manually:")
+        print(f"   {auth_url}")
+        print()
     
     # Wait for callback
     httpd.timeout = 300  # 5 minutes timeout
@@ -259,7 +401,10 @@ def setup_oauth():
         httpd.handle_request()
     except Exception as e:
         print(f"❌ Error waiting for callback: {e}")
+        httpd.server_close()
         return False
+    finally:
+        httpd.server_close()
     
     # Get code from queue
     try:
@@ -295,15 +440,27 @@ def setup_oauth():
         print("✓ Got access token and refresh token")
         print()
         
-        # Save tokens
+        # Save tokens with timestamp
+        import time
+        tokens['token_refreshed_at'] = time.time()
         save_tokens(tokens)
         
-        print("=" * 60)
+        print("=" * 70)
         print("✅ OAuth setup complete!")
-        print("=" * 60)
+        print("=" * 70)
         print()
-        print("Your tokens have been saved. The code will now use them automatically.")
-        print("Access tokens expire after ~4 hours, but will be refreshed automatically.")
+        print("✅ Tokens saved to: canva_tokens.json")
+        print()
+        print("📝 Next steps:")
+        print("   • Your tokens will be used automatically by the application")
+        print("   • Access tokens expire after ~4 hours but refresh automatically")
+        print("   • For production (Render/Railway), set these environment variables:")
+        print("     - CANVA_CLIENT_ID")
+        print("     - CANVA_CLIENT_SECRET")
+        print("     - CANVA_REFRESH_TOKEN (from canva_tokens.json)")
+        print("     - CANVA_ACCESS_TOKEN (from canva_tokens.json)")
+        print("     - CANVA_TOKEN_REFRESHED_AT (current timestamp)")
+        print("     - CANVA_REDIRECT_URI")
         print()
         
         return True
@@ -316,6 +473,16 @@ def setup_oauth():
 
 
 if __name__ == "__main__":
-    success = setup_oauth()
-    exit(0 if success else 1)
+    import sys
+    try:
+        success = setup_oauth()
+        sys.exit(0 if success else 1)
+    except KeyboardInterrupt:
+        print("\n\n⚠️  Setup cancelled by user.")
+        sys.exit(1)
+    except Exception as e:
+        print(f"\n❌ Unexpected error: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
 

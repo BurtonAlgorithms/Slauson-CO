@@ -598,7 +598,6 @@ class HTMLSlideGenerator:
             import numpy as np
         except ImportError:
             return img
-            return img
         arr = np.array(img)
         rgb = arr[..., :3].astype(np.float32)
         a = arr[..., 3].astype(np.float32) / 255.0

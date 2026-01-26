@@ -991,25 +991,48 @@ class CanvaIntegration:
         if self._access_token and self._refresh_token and self.client_id and self.client_secret:
             import time
             import json
-            if os.path.exists(self.token_file):
+            
+            # Check token age from environment variable first (for Render)
+            env_token_refreshed_at = os.getenv("CANVA_TOKEN_REFRESHED_AT")
+            token_refreshed_at = 0
+            
+            if env_token_refreshed_at:
+                try:
+                    token_refreshed_at = float(env_token_refreshed_at)
+                except (ValueError, TypeError):
+                    pass
+            
+            # Fallback to file if no env var (for local development)
+            if token_refreshed_at == 0 and os.path.exists(self.token_file):
                 try:
                     with open(self.token_file, 'r') as f:
                         tokens = json.load(f)
                         token_refreshed_at = tokens.get("token_refreshed_at", 0)
-                        current_time = time.time()
-                        time_since_refresh = current_time - token_refreshed_at
-                        
-                        if time_since_refresh > 14400:  # 4 hours (14400 seconds)
-                            hours_old = time_since_refresh / 3600
-                            print(f"   Token is {hours_old:.1f} hours old (>4 hours), refreshing automatically...")
-                            return self._refresh_access_token()
                 except Exception as e:
-                    print(f"   ⚠️  Could not check token age: {e}")
+                    print(f"   ⚠️  Could not read token file: {e}")
+            
+            # Check if token is old enough to refresh
+            if token_refreshed_at > 0:
+                current_time = time.time()
+                time_since_refresh = current_time - token_refreshed_at
+                
+                if time_since_refresh > 14400:  # 4 hours (14400 seconds)
+                    hours_old = time_since_refresh / 3600
+                    print(f"   Token is {hours_old:.1f} hours old (>4 hours), refreshing automatically...")
+                    try:
+                        return self._refresh_access_token()
+                    except Exception as e:
+                        print(f"   ⚠️  Automatic refresh failed: {e}")
+                        print(f"   Will try using existing token (may be expired)")
+                elif time_since_refresh > 0:
+                    hours_old = time_since_refresh / 3600
+                    print(f"   Token is {hours_old:.1f} hours old (still valid)")
         
         # Priority 1: Use refresh token if available (Canva doesn't support client_credentials)
-        if self._refresh_token and self.client_id and self.client_secret:
+        # Only try this if we don't have a valid access token already
+        if not self._access_token and self._refresh_token and self.client_id and self.client_secret:
             try:
-                print("   Refreshing access token using refresh token...")
+                print("   No access token cached, refreshing using refresh token...")
                 return self._refresh_access_token()
             except Exception as e:
                 print(f"   ⚠️  Token refresh failed: {e}")

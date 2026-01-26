@@ -95,7 +95,7 @@ This will:
 4. Fill in:
    - App name: "Slauson Automation"
    - Description: "Automated slide generation"
-   - Redirect URI: `http://localhost:8080/callback`
+  - Redirect URI: `https://oauth.example.com/canva/callback`
 5. **Save your Client ID and Client Secret**
 
 ### 3.2 Run Canva OAuth Setup

@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OAuth Setup - Click Here!</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        .container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            max-width: 700px;
+            width: 100%;
+            padding: 50px;
+            text-align: center;
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 42px;
+        }
+        .subtitle {
+            color: #666;
+            font-size: 18px;
+            margin-bottom: 40px;
+        }
+        .big-btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 25px 50px;
+            border-radius: 15px;
+            font-size: 24px;
+            font-weight: bold;
+            cursor: pointer;
+            width: 100%;
+            margin: 30px 0;
+            text-decoration: none;
+            display: inline-block;
+            transition: transform 0.2s, box-shadow 0.2s;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+        }
+        .big-btn:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 15px 40px rgba(0,0,0,0.3);
+        }
+        .big-btn:active {
+            transform: translateY(-1px);
+        }
+        .status-box {
+            background: #f8f9fa;
+            border-radius: 12px;
+            padding: 20px;
+            margin: 20px 0;
+            border-left: 4px solid #667eea;
+        }
+        .status-box.checking {
+            background: #fff3cd;
+            border-left-color: #ffc107;
+        }
+        .status-box.ready {
+            background: #d4edda;
+            border-left-color: #28a745;
+        }
+        .status-box.not-ready {
+            background: #f8d7da;
+            border-left-color: #dc3545;
+        }
+        .instructions {
+            background: #f8f9fa;
+            border-radius: 12px;
+            padding: 25px;
+            margin: 30px 0;
+            text-align: left;
+        }
+        .instructions h3 {
+            color: #333;
+            margin-bottom: 15px;
+            font-size: 18px;
+        }
+        .instructions ol {
+            margin-left: 25px;
+            line-height: 2.2;
+        }
+        .instructions code {
+            background: #e9ecef;
+            padding: 3px 8px;
+            border-radius: 4px;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+        }
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #667eea;
+            border-radius: 50%;
+            width: 30px;
+            height: 30px;
+            animation: spin 1s linear infinite;
+            margin: 10px auto;
+            display: inline-block;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .hidden { display: none; }
+        .emoji { font-size: 48px; margin-bottom: 20px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="emoji">🔐</div>
+        <h1>OAuth Setup</h1>
+        <p class="subtitle">Easy setup for Google Drive and Canva - No terminal needed!</p>
+        
+        <div id="status-checking" class="status-box checking">
+            <div class="spinner"></div>
+            <p style="margin-top: 10px;">Checking if setup server is running...</p>
+        </div>
+        
+        <div id="status-ready" class="status-box ready hidden">
+            <strong>✅ Ready!</strong>
+            <p style="margin-top: 10px;">The setup server is running. Click the button below to start!</p>
+        </div>
+        
+        <div id="status-not-ready" class="status-box not-ready hidden">
+            <strong>⚠️ Server Not Running</strong>
+            <p style="margin-top: 10px;">The setup server needs to be started first. See instructions below.</p>
+        </div>
+        
+        <a href="http://localhost:8080" class="big-btn" id="setup-btn" target="_blank" style="pointer-events: none; opacity: 0.5;">
+            Open Setup Interface →
+        </a>
+        
+        <div class="instructions">
+            <h3>📋 How to Start:</h3>
+            <ol>
+                <li><strong>Easiest:</strong> Double-click <code>start_oauth_setup.command</code> (Mac) or <code>start_oauth_setup.bat</code> (Windows)</li>
+                <li><strong>Or:</strong> Open terminal/command prompt and run:
+                    <br><br>
+                    <code style="display: block; padding: 12px; background: #e9ecef; border-radius: 6px; font-size: 14px;">
+                        python3 oauth_setup_web.py
+                    </code>
+                    <br>
+                    (On Windows, use: <code>python oauth_setup_web.py</code>)
+                </li>
+                <li>Wait a few seconds, then refresh this page or click "Check Again"</li>
+                <li>When the button above turns green, click it to start setup!</li>
+            </ol>
+        </div>
+        
+        <button onclick="checkServer()" style="background: #6c757d; color: white; border: none; padding: 12px 24px; border-radius: 8px; cursor: pointer; font-size: 14px; margin-top: 20px;">
+            🔄 Check Again
+        </button>
+    </div>
+    
+    <script>
+        function checkServer() {
+            const checking = document.getElementById('status-checking');
+            const ready = document.getElementById('status-ready');
+            const notReady = document.getElementById('status-not-ready');
+            const btn = document.getElementById('setup-btn');
+            
+            checking.classList.remove('hidden');
+            ready.classList.add('hidden');
+            notReady.classList.add('hidden');
+            btn.style.pointerEvents = 'none';
+            btn.style.opacity = '0.5';
+            
+            // Try to fetch from the server
+            fetch('http://localhost:8080/api/status')
+                .then(response => {
+                    if (response.ok) {
+                        checking.classList.add('hidden');
+                        ready.classList.remove('hidden');
+                        btn.style.pointerEvents = 'auto';
+                        btn.style.opacity = '1';
+                    } else {
+                        throw new Error('Server not ready');
+                    }
+                })
+                .catch(() => {
+                    checking.classList.add('hidden');
+                    notReady.classList.remove('hidden');
+                    btn.style.pointerEvents = 'none';
+                    btn.style.opacity = '0.5';
+                });
+        }
+        
+        // Check on load
+        checkServer();
+        
+        // Auto-check every 2 seconds
+        setInterval(checkServer, 2000);
+    </script>
+</body>
+</html>
+
