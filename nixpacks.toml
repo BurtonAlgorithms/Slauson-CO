@@ -1,5 +1,5 @@
 [phases.setup]
-nixPkgs = ["poppler", "python311", "python311Packages.pip", "gcc", "meson", "ninja", "pkg-config", "cairo"]
+nixPkgs = ["poppler", "poppler_utils", "python311", "python311Packages.pip", "gcc", "meson", "ninja", "pkg-config", "cairo"]
 
 [variables]
 PYTHON_VERSION = "3.11"
