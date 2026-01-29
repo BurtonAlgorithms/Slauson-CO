@@ -22,6 +22,7 @@ import base64
 import io
 import requests
 from urllib.parse import urlparse
+from typing import Optional
 
 app = Flask(__name__)
 
@@ -54,6 +55,20 @@ def _should_delete_previous_design() -> bool:
     return val in ("1", "true", "yes", "y")
 
 
+def _extract_drive_file_id(url: str) -> Optional[str]:
+    """Extract Google Drive file ID from common URL formats."""
+    import re
+    # Format 1: https://drive.google.com/open?id=FILE_ID
+    match = re.search(r"[?&]id=([a-zA-Z0-9_-]+)", url)
+    if match:
+        return match.group(1)
+    # Format 2: https://drive.google.com/file/d/FILE_ID/view
+    match = re.search(r"/file/d/([a-zA-Z0-9_-]+)", url)
+    if match:
+        return match.group(1)
+    return None
+
+
 def download_file_from_url(url: str, output_path: str):
     """
     Download file from URL (handles Notion file URLs and Google Drive URLs).
@@ -63,21 +78,22 @@ def download_file_from_url(url: str, output_path: str):
         output_path: Path to save file
     """
     # Handle Google Drive URLs in different formats
-    if 'drive.google.com' in url:
-        # Extract file ID from various Google Drive URL formats
-        import re
-        file_id = None
-        
-        # Format 1: https://drive.google.com/open?id=FILE_ID
-        match = re.search(r'[?&]id=([a-zA-Z0-9_-]+)', url)
-        if match:
-            file_id = match.group(1)
-        # Format 2: https://drive.google.com/file/d/FILE_ID/view
-        else:
-            match = re.search(r'/file/d/([a-zA-Z0-9_-]+)', url)
-            if match:
-                file_id = match.group(1)
-        
+    file_id = None
+    if "drive.google.com" in url:
+        file_id = _extract_drive_file_id(url)
+
+        # Prefer authenticated download via Drive API if available
+        if file_id:
+            try:
+                print(f"  Downloading Google Drive file via API: {file_id}")
+                drive = GoogleDriveIntegration()
+                content = drive.download_file(file_id)
+                with open(output_path, "wb") as f:
+                    f.write(content)
+                return
+            except Exception as e:
+                print(f"  Drive API download failed, falling back to public URL: {e}")
+
         if file_id:
             # Convert to direct download URL
             url = f"https://drive.google.com/uc?export=download&id={file_id}"
