@@ -17,7 +17,10 @@ import json
 class GoogleDriveIntegration:
     """Handle Google Drive API operations."""
     
-    SCOPES = ['https://www.googleapis.com/auth/drive.file']
+    # Use full Drive scope so we can list/read existing files in folders.
+    # drive.file only sees files created/opened by this app, which makes
+    # shared folders appear empty even when the user can see them in UI.
+    SCOPES = ['https://www.googleapis.com/auth/drive']
     
     def __init__(self):
         """Initialize Google Drive client."""
@@ -134,7 +137,8 @@ class GoogleDriveIntegration:
             file = self.service.files().create(
                 body=file_metadata,
                 media_body=media,
-                fields='id, webViewLink, webContentLink'
+                fields='id, webViewLink, webContentLink',
+                supportsAllDrives=True
             ).execute()
             
             file_id = file.get('id')
@@ -142,13 +146,15 @@ class GoogleDriveIntegration:
             # Make file shareable (anyone with link can view)
             self.service.permissions().create(
                 fileId=file_id,
-                body={'role': 'reader', 'type': 'anyone'}
+                body={'role': 'reader', 'type': 'anyone'},
+                supportsAllDrives=True
             ).execute()
             
             # Get shareable link
             file = self.service.files().get(
                 fileId=file_id,
-                fields='webViewLink, webContentLink'
+                fields='webViewLink, webContentLink',
+                supportsAllDrives=True
             ).execute()
             
             # Prefer webViewLink (opens in Drive) over webContentLink (direct download)
@@ -170,7 +176,7 @@ class GoogleDriveIntegration:
         if not self.service:
             raise ValueError("Google Drive service not initialized")
         try:
-            request = self.service.files().get_media(fileId=file_id)
+            request = self.service.files().get_media(fileId=file_id, supportsAllDrives=True)
             buf = io.BytesIO()
             downloader = MediaIoBaseDownload(buf, request)
             done = False
@@ -189,10 +195,19 @@ class GoogleDriveIntegration:
             raise ValueError("Google Drive service not initialized")
         try:
             media = MediaIoBaseUpload(io.BytesIO(pdf_bytes), mimetype='application/pdf', resumable=True)
-            self.service.files().update(fileId=file_id, media_body=media, fields='id, webViewLink, webContentLink').execute()
+            self.service.files().update(
+                fileId=file_id,
+                media_body=media,
+                fields='id, webViewLink, webContentLink',
+                supportsAllDrives=True
+            ).execute()
 
             # Re-fetch links
-            file = self.service.files().get(fileId=file_id, fields='webViewLink, webContentLink').execute()
+            file = self.service.files().get(
+                fileId=file_id,
+                fields='webViewLink, webContentLink',
+                supportsAllDrives=True
+            ).execute()
             link = file.get('webViewLink') or file.get('webContentLink') or f"https://drive.google.com/file/d/{file_id}/view"
             return link
         except HttpError as error:
@@ -211,7 +226,10 @@ class GoogleDriveIntegration:
                 q=q,
                 spaces='drive',
                 fields="files(id, name)",
-                pageSize=1
+                pageSize=1,
+                supportsAllDrives=True,
+                includeItemsFromAllDrives=True,
+                corpora='allDrives'
             ).execute()
             files = resp.get("files", [])
             return files[0]["id"] if files else None
@@ -238,6 +256,95 @@ class GoogleDriveIntegration:
         except HttpError as error:
             print(f"Warning: Google Drive search error (global): {error}")
             return None
+
+    def find_folder_id_by_name(self, folder_name: str, parent_folder_id: Optional[str] = None) -> Optional[str]:
+        """
+        Find the first folder ID matching a given name (optionally within a parent folder).
+        If not found in the parent, falls back to global search.
+        """
+        if not self.service:
+            raise ValueError("Google Drive service not initialized")
+
+        def _search(q):
+            resp = self.service.files().list(
+                q=q,
+                spaces='drive',
+                fields="files(id, name)",
+                pageSize=1
+            ).execute()
+            files = resp.get("files", [])
+            return files[0]["id"] if files else None
+
+        query_parts = [f"name = '{folder_name}'", "mimeType = 'application/vnd.google-apps.folder'"]
+        if parent_folder_id:
+            query_parts.append(f"'{parent_folder_id}' in parents")
+        query = " and ".join(query_parts)
+        try:
+            folder_id = _search(query)
+            if folder_id:
+                return folder_id
+        except HttpError as error:
+            print(f"Warning: Google Drive folder search error (scoped): {error}")
+
+        try:
+            global_query = f"name = '{folder_name}' and mimeType = 'application/vnd.google-apps.folder'"
+            folder_id = _search(global_query)
+            if folder_id:
+                print(f"   Found folder '{folder_name}' via global search.")
+            return folder_id
+        except HttpError as error:
+            print(f"Warning: Google Drive folder search error (global): {error}")
+            return None
+
+    def list_pdf_files_in_folder(self, folder_id: str, limit: int = 20) -> list:
+        """
+        List PDF files in a specific folder for debugging.
+        Returns a list of dicts with id and name.
+        """
+        if not self.service:
+            raise ValueError("Google Drive service not initialized")
+        if not folder_id:
+            return []
+        try:
+            query = f"'{folder_id}' in parents and mimeType = 'application/pdf'"
+            resp = self.service.files().list(
+                q=query,
+                spaces='drive',
+                fields="files(id, name)",
+                pageSize=limit,
+                supportsAllDrives=True,
+                includeItemsFromAllDrives=True,
+                corpora='allDrives'
+            ).execute()
+            return resp.get("files", [])
+        except HttpError as error:
+            print(f"Warning: Google Drive list error: {error}")
+            return []
+
+    def list_files_in_folder(self, folder_id: str, limit: int = 200) -> list:
+        """
+        List files in a specific folder for debugging.
+        Returns a list of dicts with id and name.
+        """
+        if not self.service:
+            raise ValueError("Google Drive service not initialized")
+        if not folder_id:
+            return []
+        try:
+            query = f"'{folder_id}' in parents and trashed = false"
+            resp = self.service.files().list(
+                q=query,
+                spaces='drive',
+                fields="files(id, name)",
+                pageSize=limit,
+                supportsAllDrives=True,
+                includeItemsFromAllDrives=True,
+                corpora='allDrives'
+            ).execute()
+            return resp.get("files", [])
+        except HttpError as error:
+            print(f"Warning: Google Drive list error: {error}")
+            return []
     
     def delete_file(self, file_id: str) -> bool:
         """
@@ -308,7 +415,8 @@ class GoogleDriveIntegration:
             
             folder = self.service.files().create(
                 body=file_metadata,
-                fields='id'
+                fields='id',
+                supportsAllDrives=True
             ).execute()
             
             return folder.get('id')

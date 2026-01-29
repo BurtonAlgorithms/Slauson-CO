@@ -15,7 +15,9 @@ from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 
 # Scopes needed for Google Drive
-SCOPES = ['https://www.googleapis.com/auth/drive.file']
+# Use full Drive scope so we can list/read existing files in folders.
+# drive.file only sees files created/opened by this app.
+SCOPES = ['https://www.googleapis.com/auth/drive']
 
 def print_header():
     """Print setup header."""

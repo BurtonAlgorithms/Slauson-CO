@@ -25,6 +25,34 @@ from urllib.parse import urlparse
 
 app = Flask(__name__)
 
+def _update_env_var(key: str, value: str, env_path: str = ".env") -> None:
+    """Update or add a single env var in .env for local persistence."""
+    try:
+        lines = []
+        if os.path.exists(env_path):
+            with open(env_path, "r") as f:
+                lines = f.readlines()
+        updated = False
+        new_lines = []
+        for line in lines:
+            if line.startswith(f"{key}="):
+                new_lines.append(f"{key}={value}\n")
+                updated = True
+            else:
+                new_lines.append(line)
+        if not updated:
+            if new_lines and not new_lines[-1].endswith("\n"):
+                new_lines[-1] = new_lines[-1] + "\n"
+            new_lines.append(f"{key}={value}\n")
+        with open(env_path, "w") as f:
+            f.writelines(new_lines)
+    except Exception as e:
+        print(f"Warning: could not update {key} in {env_path}: {e}")
+
+def _should_delete_previous_design() -> bool:
+    val = os.getenv("CANVA_DELETE_PREVIOUS_DESIGN", "0").strip().lower()
+    return val in ("1", "true", "yes", "y")
+
 
 def download_file_from_url(url: str, output_path: str):
     """
@@ -578,14 +606,43 @@ def handle_onboarding():
                 try:
                     drive = GoogleDriveIntegration()
 
-                    # Preferred static target (SlidesGen.pdf) via env/Config
+                    # Resolve target folder and static file name
+                    drive_folder_id = os.getenv("GOOGLE_DRIVE_FOLDER_ID") or getattr(Config, "GOOGLE_DRIVE_FOLDER_ID", None)
+                    drive_folder_name = (
+                        os.getenv("GOOGLE_DRIVE_FOLDER_NAME")
+                        or getattr(Config, "GOOGLE_DRIVE_FOLDER_NAME", None)
+                        or "Slauson Deck (Portco Slides)"
+                    )
+
+                    if not drive_folder_id and drive_folder_name:
+                        drive_folder_id = drive.find_folder_id_by_name(drive_folder_name)
+                        if drive_folder_id:
+                            print(f"   Found Drive folder '{drive_folder_name}': {drive_folder_id}")
+                        else:
+                            print(f"   Drive folder '{drive_folder_name}' not found, creating it...")
+                            drive_folder_id = drive.create_folder(drive_folder_name)
+                            print(f"   Created Drive folder '{drive_folder_name}': {drive_folder_id}")
+                    
+                    if drive_folder_id:
+                        all_files = drive.list_files_in_folder(drive_folder_id, limit=200)
+                        if all_files:
+                            names = ", ".join([f"{f.get('name')} ({f.get('id')})" for f in all_files])
+                            print(f"   Files in folder: {names}")
+                        else:
+                            print("   No files found in target folder.")
+
+                    # Preferred static target via env/Config (defaults to Portfolio Slides.pdf)
                     static_file_id = os.getenv("GOOGLE_DRIVE_STATIC_FILE_ID") or getattr(Config, "GOOGLE_DRIVE_STATIC_FILE_ID", None)
-                    static_file_name = os.getenv("GOOGLE_DRIVE_STATIC_FILE_NAME") or getattr(Config, "GOOGLE_DRIVE_STATIC_FILE_NAME", None)
+                    static_file_name = (
+                        os.getenv("GOOGLE_DRIVE_STATIC_FILE_NAME")
+                        or getattr(Config, "GOOGLE_DRIVE_STATIC_FILE_NAME", None)
+                        or "Portfolio Slides.pdf"
+                    )
 
                     target_file_id = None
                     # Resolve static file ID by name if only name is provided
                     if not static_file_id and static_file_name:
-                        target_file_id = drive.find_file_id_by_name(static_file_name, parent_folder_id=Config.GOOGLE_DRIVE_FOLDER_ID)
+                        target_file_id = drive.find_file_id_by_name(static_file_name, parent_folder_id=drive_folder_id)
                         if target_file_id:
                             print(f"   Found static Drive file by name '{static_file_name}': {target_file_id}")
                     elif static_file_id:
@@ -600,7 +657,7 @@ def handle_onboarding():
                         google_drive_link = drive.upload_pdf(
                             slide_pdf_bytes,
                             static_file_name or filename,
-                            folder_id=Config.GOOGLE_DRIVE_FOLDER_ID
+                            folder_id=drive_folder_id
                         )
                         results["google_drive_link"] = google_drive_link
                         print(f"✓ Uploaded new Drive PDF: {google_drive_link}")
@@ -728,6 +785,8 @@ def handle_onboarding():
                             target_canva_design_id = existing_canva_design_id
                             print(f"   Found existing Canva design ID: {target_canva_design_id}")
                         
+                        previous_design_id = target_canva_design_id
+                        
                         if target_canva_design_id:
                             # Append to existing design
                             print("Appending slide to existing Canva design...")
@@ -767,6 +826,12 @@ def handle_onboarding():
                                         results["canva_design_id"] = canva_design_id
                                         results["canva_design_url"] = canva_design_url
                                         print(f"✓ Appended slide to Canva design: {canva_design_id}")
+                                        if canva_design_id and canva_design_id.startswith("DAG"):
+                                            Config.CANVA_STATIC_DESIGN_ID = canva_design_id
+                                            _update_env_var("CANVA_STATIC_DESIGN_ID", canva_design_id)
+                                            print(f"   Updated CANVA_STATIC_DESIGN_ID to {canva_design_id}")
+                                            if _should_delete_previous_design() and previous_design_id and previous_design_id != canva_design_id:
+                                                canva.delete_design(previous_design_id)
                                     else:
                                         print(f"⚠️  Canva import job did not complete successfully: {status_info.get('status')}")
                                 else:
@@ -774,6 +839,12 @@ def handle_onboarding():
                                     canva_design_id = canva_asset_id
                                     results["canva_design_id"] = canva_design_id
                                     print(f"✓ Appended slide to Canva design: {canva_design_id}")
+                                    if canva_design_id and canva_design_id.startswith("DAG"):
+                                        Config.CANVA_STATIC_DESIGN_ID = canva_design_id
+                                        _update_env_var("CANVA_STATIC_DESIGN_ID", canva_design_id)
+                                        print(f"   Updated CANVA_STATIC_DESIGN_ID to {canva_design_id}")
+                                        if _should_delete_previous_design() and previous_design_id and previous_design_id != canva_design_id:
+                                            canva.delete_design(previous_design_id)
                             except Exception as e:
                                 print(f"⚠️  Failed to append to existing design: {e}")
                                 print("   Falling back to uploading as new design...")
@@ -799,6 +870,12 @@ def handle_onboarding():
                                     results["canva_design_id"] = canva_design_id
                                     results["canva_design_url"] = canva_design_url
                                     print(f"✓ Created new Canva design: {canva_design_id}")
+                                    if canva_design_id and canva_design_id.startswith("DAG"):
+                                        Config.CANVA_STATIC_DESIGN_ID = canva_design_id
+                                        _update_env_var("CANVA_STATIC_DESIGN_ID", canva_design_id)
+                                        print(f"   Updated CANVA_STATIC_DESIGN_ID to {canva_design_id}")
+                                        if _should_delete_previous_design() and previous_design_id and previous_design_id != canva_design_id:
+                                            canva.delete_design(previous_design_id)
                                 else:
                                     print(f"⚠️  Canva import job did not complete successfully: {status_info.get('status')}")
                             else:

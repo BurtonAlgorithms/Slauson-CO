@@ -48,6 +48,7 @@ class Config:
     GOOGLE_DRIVE_CREDENTIALS_JSON = os.getenv("GOOGLE_DRIVE_CREDENTIALS_JSON")  # JSON string of credentials
     GOOGLE_SERVICE_ACCOUNT_PATH = os.getenv("GOOGLE_SERVICE_ACCOUNT_PATH")  # Path to service account JSON file
     GOOGLE_DRIVE_FOLDER_ID = os.getenv("GOOGLE_DRIVE_FOLDER_ID")  # Optional folder ID to upload to
+    GOOGLE_DRIVE_FOLDER_NAME = os.getenv("GOOGLE_DRIVE_FOLDER_NAME")  # Optional folder name fallback
     GOOGLE_DRIVE_STATIC_FILE_ID = os.getenv("GOOGLE_DRIVE_STATIC_FILE_ID")  # Optional: File ID of SlidesGen.pdf (for DocSend)
     GOOGLE_DRIVE_STATIC_FILE_NAME = os.getenv("GOOGLE_DRIVE_STATIC_FILE_NAME")  # Optional: Filename to search for (e.g., "SlidesGen.pdf")
     

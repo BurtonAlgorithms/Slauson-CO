@@ -427,17 +427,24 @@ class CanvaIntegration:
                 # If successful, include design_id
                 # Try multiple possible fields where design_id might be
                 if status_info['status'] == 'success':
-                    design_id = (
-                        job.get("design_id") or 
-                        job.get("designId") or 
-                        job.get("id") or
-                        job.get("result", {}).get("design_id") or
-                        job.get("result", {}).get("designId") or
-                        job.get("result", {}).get("id") or
-                        result.get("design_id") or
-                        result.get("designId") or
-                        result.get("id")
-                    )
+                    # Prefer actual design IDs from the result payload
+                    result_designs = job.get("result", {}).get("designs", []) if isinstance(job, dict) else []
+                    design_id = None
+                    if result_designs and isinstance(result_designs, list):
+                        design_id = result_designs[0].get("id")
+                        if design_id:
+                            status_info['design_url'] = result_designs[0].get("urls", {}).get("edit_url")
+                    if not design_id:
+                        design_id = (
+                            job.get("design_id") or 
+                            job.get("designId") or 
+                            job.get("result", {}).get("design_id") or
+                            job.get("result", {}).get("designId") or
+                            job.get("result", {}).get("id") or
+                            result.get("design_id") or
+                            result.get("designId") or
+                            result.get("id")
+                        )
                     if design_id:
                         status_info['design_id'] = design_id
                         # Try to get URL from various possible fields
@@ -526,6 +533,35 @@ class CanvaIntegration:
                 continue
         
         raise Exception(f"Failed to duplicate design from all endpoints. Last error: {last_error}")
+
+    def delete_design(self, design_id: str) -> bool:
+        """
+        Attempt to delete a Canva design.
+        Returns True if deletion succeeded, False otherwise.
+        """
+        if not design_id:
+            return False
+        print(f"   Attempting to delete Canva design: {design_id}")
+        endpoints = [
+            (f"{self.base_url}/designs/{design_id}", "delete", None),
+            (f"{self.base_url}/designs/{design_id}/delete", "post", {"type": "DESIGN"}),
+        ]
+        last_error = None
+        for url, method, payload in endpoints:
+            try:
+                if payload is None:
+                    response = self._make_authenticated_request(method, url)
+                else:
+                    response = self._make_authenticated_request(method, url, json=payload)
+                if response.status_code in (200, 204):
+                    print(f"   ✓ Deleted Canva design: {design_id}")
+                    return True
+                last_error = f"{response.status_code}: {response.text[:200]}"
+            except Exception as e:
+                last_error = str(e)
+                continue
+        print(f"   ⚠️  Failed to delete Canva design {design_id}: {last_error}")
+        return False
     
     def _replace_design_content(self, design_id: str, pdf_bytes: bytes, filename: str) -> bool:
         """

@@ -2,8 +2,8 @@
 # Test webhook with actual headshot and logo images (base64 encoded)
 
 # Use actual image files
-HEADSHOT_PATH="/Users/henoktewolde/Downloads/headshot_example.jpeg"
-LOGO_PATH="/Users/henoktewolde/Downloads/logoexample.jpeg"
+HEADSHOT_PATH="/Users/henoktewolde/headshot_example.jpeg"
+LOGO_PATH="/Users/henoktewolde/logo_example.jpeg"
 
 # Check if images exist
 if [ ! -f "$HEADSHOT_PATH" ]; then
