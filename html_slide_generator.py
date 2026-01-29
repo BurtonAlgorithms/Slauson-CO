@@ -138,6 +138,11 @@ class HTMLSlideGenerator:
             font_candidates.append("/System/Library/Fonts/Arial Bold.ttf")
         font_candidates.append("/System/Library/Fonts/Helvetica.ttc")
         font_candidates.append("/System/Library/Fonts/Arial.ttf")
+        
+        # PIL bundled fonts (work even when system fonts are missing)
+        if bold:
+            font_candidates.append("DejaVuSans-Bold.ttf")
+        font_candidates.append("DejaVuSans.ttf")
 
         for path in font_candidates:
             try:
