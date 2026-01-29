@@ -619,6 +619,8 @@ def handle_onboarding():
                 print("Uploading PDF to Google Drive (append/overwrite if existing)...")
                 filename = f"{company_data.get('name', 'slide').replace(' ', '_')}_slide.pdf"
                 google_drive_link = None
+                target_file_id = None
+                drive = None
                 try:
                     drive = GoogleDriveIntegration()
 
@@ -655,7 +657,6 @@ def handle_onboarding():
                         or "Portfolio Slides.pdf"
                     )
 
-                    target_file_id = None
                     # Resolve static file ID by name if only name is provided
                     if not static_file_id and static_file_name:
                         target_file_id = drive.find_file_id_by_name(static_file_name, parent_folder_id=drive_folder_id)
@@ -810,7 +811,7 @@ def handle_onboarding():
                                 # Get existing PDF from Google Drive for merging (if available)
                                 # This is the source of truth since Canva API doesn't support PDF export
                                 existing_pdf_bytes = None
-                                if target_file_id:
+                                if target_file_id and drive:
                                     try:
                                         existing_pdf_bytes = drive.download_file(target_file_id)
                                         print(f"   Downloaded existing PDF from Google Drive ({len(existing_pdf_bytes)} bytes) for Canva merge")
@@ -819,7 +820,7 @@ def handle_onboarding():
                                         print(f"   (This is OK if it's the first slide)")
                                         existing_pdf_bytes = None
                                 else:
-                                    print(f"   No Google Drive file ID available, using only new slide")
+                                    print("   No Google Drive file ID available, using only new slide")
                                 
                                 canva_asset_id = canva.append_slide_to_design(
                                     target_canva_design_id, 

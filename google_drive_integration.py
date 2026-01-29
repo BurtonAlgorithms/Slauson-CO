@@ -47,7 +47,10 @@ class GoogleDriveIntegration:
                         print("   ✓ Google Drive token refreshed")
                     except Exception as e:
                         print(f"   Warning: Could not refresh token: {e}")
-                        print(f"   Token may be revoked. Please re-run: python setup_google_oauth.py")
+                        if "invalid_scope" in str(e).lower():
+                            print("   Token was issued with the wrong scope. Re-run: python setup_google_oauth.py")
+                        else:
+                            print("   Token may be revoked. Please re-run: python setup_google_oauth.py")
                         # Don't use expired token, continue to next method
                         creds = None
                 
@@ -74,6 +77,8 @@ class GoogleDriveIntegration:
                             creds.refresh(Request())
                         except Exception as e:
                             print(f"   Warning: Could not refresh env token: {e}")
+                            if "invalid_scope" in str(e).lower():
+                                print("   Env token scope mismatch. Re-run setup_google_oauth.py and update GOOGLE_DRIVE_CREDENTIALS_JSON.")
                             creds = None
                     
                     if creds and creds.valid:
@@ -91,7 +96,8 @@ class GoogleDriveIntegration:
         raise ValueError(
             "Google Drive OAuth credentials not configured or expired. "
             "Service accounts don't have storage quota. "
-            "For personal Google Drive (hmikaeltewolde@gmail.com), you need to set up OAuth. "
+            "For personal Google Drive (hmikaeltewolde@gmail.com), you need to set up OAuth "
+            "with scope https://www.googleapis.com/auth/drive. "
             "Options:\n"
             "1. Run: python setup_google_oauth.py (if you have credentials.json)\n"
             "2. Set GOOGLE_DRIVE_CREDENTIALS_JSON environment variable with OAuth token JSON\n"

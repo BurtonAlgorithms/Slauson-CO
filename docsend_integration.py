@@ -86,8 +86,14 @@ class DocSendIntegration:
         )
         
         if response.status_code in [200, 201]:
+            # Some auth failures return HTML with a 200 status
+            if response.headers.get('content-type', '').startswith('text/html'):
+                raise Exception("DocSend API authentication failed - check your API key. Status: 200")
             return response.json().get("link", "")
         else:
+            # Check if response is HTML (login page) - means API key is invalid
+            if response.headers.get('content-type', '').startswith('text/html'):
+                raise Exception(f"DocSend API authentication failed - check your API key. Status: {response.status_code}")
             raise Exception(f"DocSend update error: {response.status_code} - {response.text}")
     
     def merge_pdfs(self, existing_pdf_bytes: bytes, new_slide_bytes: bytes) -> bytes:

@@ -294,6 +294,8 @@ class NotionIntegration:
             return True
         except Exception as e:
             print(f"Error updating Notion record: {e}")
+            if "Could not find page with ID" in str(e) or "object_not_found" in str(e):
+                print("   Tip: Share the Notion page/database with your integration and try again.")
             # Try updating properties one by one
             for prop_name, prop_value in properties.items():
                 try:
@@ -303,6 +305,8 @@ class NotionIntegration:
                     )
                 except Exception as e2:
                     print(f"Warning: Could not update property '{prop_name}': {e2}")
+                    if "Could not find page with ID" in str(e2) or "object_not_found" in str(e2):
+                        print("   Tip: Share the Notion page/database with your integration and try again.")
             return False
     
     def get_company_by_page_id(self, page_id: str) -> Optional[Dict]:
@@ -351,5 +355,7 @@ class NotionIntegration:
             return company_data if company_data else None
         except Exception as e:
             print(f"Error retrieving Notion page: {e}")
+            if "Could not find page with ID" in str(e) or "object_not_found" in str(e):
+                print("   Tip: Share the Notion page/database with your integration and try again.")
             return None
 
