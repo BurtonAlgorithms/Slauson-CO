@@ -27,6 +27,7 @@ This document lists all environment variables needed for the Slauson automation 
 - `CANVA_STATIC_DESIGN_ID` - (Optional) Design ID to append slides to (for reference/logging)
 - `CANVA_REDIRECT_URI` - OAuth redirect URI registered in your Canva app (recommended to point to your server callback, e.g. `https://your-app.com/oauth/canva/callback`)
 - `FLASK_SECRET_KEY` - Secret used to sign the OAuth PKCE session cookie (required for stable sessions in production)
+- `CANVA_DESTINATION_FOLDER_ID` - (Optional) Move newly imported Canva designs into this folder (example folder link `https://www.canva.com/folder/FAHAWSvTMQY` → ID is `FAHAWSvTMQY`). Requires OAuth scope `folder:write` (re-authorize after adding).
 
 **Note:** Canva OAuth tokens are stored in `canva_tokens.json` locally, or can be set via:
 - `CANVA_REFRESH_TOKEN` - (For Render) Refresh token for auto-refresh

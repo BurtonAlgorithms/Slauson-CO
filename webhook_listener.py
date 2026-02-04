@@ -28,6 +28,66 @@ import time
 
 from slide_job_index_store import SlideJobIndexStore
 
+
+def _truthy(val) -> bool:
+    if isinstance(val, bool):
+        return val
+    if val is None:
+        return False
+    s = str(val).strip().lower()
+    return s in ("1", "true", "yes", "y", "on")
+
+
+def _generate_slide_job_id(notion_page_id: Optional[str]) -> str:
+    """
+    Generate a Slide Job ID matching the frontend scheme:
+      <first8_of_notion_page_id>-<YYYYMMDDHHmmss_UTC>-<8char_UPPER_suffix>
+    """
+    import re
+
+    base = notion_page_id or "local"
+    clean = re.sub(r"[^a-zA-Z0-9]", "", base)
+    prefix = (clean[:8] or "local").lower()
+    ts = time.strftime("%Y%m%d%H%M%S", time.gmtime())
+    suffix = uuid.uuid4().hex[:8].upper()
+    return f"{prefix}-{ts}-{suffix}"
+
+
+def _sync_master_pdf_to_canva(master_pdf_bytes: bytes, filename: str = "Portfolio Slides.pdf") -> Optional[dict]:
+    """
+    Import the *entire* master PDF into Canva and move it into the destination folder (if configured).
+
+    This is used to keep Canva in sync with the Google Drive master PDF after create/edit/delete.
+    """
+    try:
+        if not master_pdf_bytes:
+            return None
+
+        # Allow disabling in environments where Canva sync is undesired/too expensive.
+        if os.getenv("CANVA_SYNC_MASTER_PDF", "1").strip().lower() in ("0", "false", "no", "n"):
+            return None
+
+        has_canva_creds = bool((Config.CANVA_CLIENT_ID and Config.CANVA_CLIENT_SECRET) and Config.CANVA_TEMPLATE_ID)
+        if not has_canva_creds:
+            return None
+
+        canva = CanvaIntegration()
+        job_id = canva.upload_pdf_asset(master_pdf_bytes, filename=filename)
+        status = canva.wait_for_import_completion(job_id, max_wait_seconds=180, poll_interval=2)
+
+        if status.get("status") != "success":
+            print(f"⚠️  Canva master PDF sync did not succeed. Status: {status}")
+            return status
+
+        return {
+            "status": "success",
+            "design_id": status.get("design_id"),
+            "design_url": status.get("design_url") or (f"https://www.canva.com/design/{status.get('design_id')}/edit" if status.get("design_id") else None),
+        }
+    except Exception as e:
+        print(f"⚠️  Canva master PDF sync failed: {e}")
+        return {"status": "failed", "error": str(e)}
+
 app = Flask(__name__)
 # Needed for storing PKCE verifier during OAuth redirects.
 # Set FLASK_SECRET_KEY in production for stable sessions.
@@ -410,11 +470,143 @@ def handle_onboarding():
             "last_edited": data.get("notion_last_edited")
         }
 
+        # Delete mode: allow deleting an existing slide for a Notion entry.
+        # Frontend will send company_data__delete_slide (bool) and a job id in company_data__slide_job_id.
+        delete_slide = _truthy(
+            company_data.get("delete_slide")
+            or data.get("delete_slide")
+            or data.get("company_data__delete_slide")
+        )
+
         # Ensure we have a Slide Job ID for this run (used for per-slide tracking + Notion property)
         # Prefer an incoming Slide Job ID from Notion/Zapier; otherwise generate one.
         if not company_data.get("slide_job_id"):
-            base = notion_metadata.get("page_id") or "local"
-            company_data["slide_job_id"] = f"{base}-{uuid.uuid4().hex[:12]}"
+            company_data["slide_job_id"] = _generate_slide_job_id(notion_metadata.get("page_id"))
+
+        # If delete_slide is requested, delete the slide associated with this Notion page/job id and exit early.
+        if delete_slide:
+            results = {
+                "success": False,
+                "deleted": False,
+                "google_drive_link": None,
+                "notion_page_id": notion_metadata.get("page_id"),
+                "slide_job_id": company_data.get("slide_job_id"),
+                "canva_master_design_id": None,
+                "canva_master_design_url": None,
+                "errors": [],
+            }
+
+            notion_page_id = notion_metadata.get("page_id")
+            slide_job_id = (company_data.get("slide_job_id") or "").strip()
+
+            try:
+                drive = GoogleDriveIntegration()
+
+                drive_folder_id = os.getenv("GOOGLE_DRIVE_FOLDER_ID") or getattr(Config, "GOOGLE_DRIVE_FOLDER_ID", None)
+                drive_folder_name = (
+                    os.getenv("GOOGLE_DRIVE_FOLDER_NAME")
+                    or getattr(Config, "GOOGLE_DRIVE_FOLDER_NAME", None)
+                    or "Slauson Deck (Portco Slides)"
+                )
+                if not drive_folder_id and drive_folder_name:
+                    drive_folder_id = drive.find_folder_id_by_name(drive_folder_name)
+
+                static_file_id = os.getenv("GOOGLE_DRIVE_STATIC_FILE_ID") or getattr(Config, "GOOGLE_DRIVE_STATIC_FILE_ID", None)
+                static_file_name = (
+                    os.getenv("GOOGLE_DRIVE_STATIC_FILE_NAME")
+                    or getattr(Config, "GOOGLE_DRIVE_STATIC_FILE_NAME", None)
+                    or "Portfolio Slides.pdf"
+                )
+
+                target_file_id = static_file_id or drive.find_file_id_by_name(static_file_name, parent_folder_id=drive_folder_id)
+                if not target_file_id:
+                    results["errors"].append("No target Drive master PDF found to delete from.")
+                    return jsonify(results), 404
+
+                # Load index + find page index
+                index_store = SlideJobIndexStore.from_env(drive_folder_id)
+                index_data = index_store.load(drive)
+                entries = index_data.get("entries", {}) if isinstance(index_data, dict) else {}
+
+                notion_page_id_for_index = notion_page_id
+                if not notion_page_id_for_index and slide_job_id:
+                    for pid, info in entries.items():
+                        if isinstance(info, dict) and info.get("slide_job_id") == slide_job_id:
+                            notion_page_id_for_index = pid
+                            break
+
+                if not notion_page_id_for_index or notion_page_id_for_index not in entries:
+                    results["errors"].append("No existing slide found for this Notion page/job id (index entry missing).")
+                    return jsonify(results), 404
+
+                page_index = int(entries[notion_page_id_for_index].get("page_index"))
+
+                existing_bytes = drive.download_file(target_file_id)
+                old_reader = PdfReader(io.BytesIO(existing_bytes))
+                if page_index < 0 or page_index >= len(old_reader.pages):
+                    results["errors"].append(f"Index page_index out of range ({page_index}).")
+                    return jsonify(results), 500
+
+                # Remove the page
+                writer = PdfWriter()
+                for i, page in enumerate(old_reader.pages):
+                    if i != page_index:
+                        writer.add_page(page)
+
+                merged_buf = io.BytesIO()
+                writer.write(merged_buf)
+                merged_buf.seek(0)
+                merged_bytes = merged_buf.read()
+                google_drive_link = drive.overwrite_pdf(target_file_id, merged_bytes)
+                results["google_drive_link"] = google_drive_link
+
+                # Sync updated master PDF to Canva (bulk deck) after deletion
+                canva_master = _sync_master_pdf_to_canva(
+                    merged_bytes,
+                    filename=os.getenv("CANVA_MASTER_PDF_FILENAME") or static_file_name or "Portfolio Slides.pdf",
+                )
+                if canva_master and canva_master.get("status") == "success":
+                    results["canva_master_design_id"] = canva_master.get("design_id")
+                    results["canva_master_design_url"] = canva_master.get("design_url")
+
+                # Update index: remove entry and shift subsequent page indices down by 1
+                del entries[notion_page_id_for_index]
+                for pid, info in list(entries.items()):
+                    if not isinstance(info, dict):
+                        continue
+                    try:
+                        idx = int(info.get("page_index"))
+                    except Exception:
+                        continue
+                    if idx > page_index:
+                        info["page_index"] = idx - 1
+                        info["updated_at"] = time.time()
+                        entries[pid] = info
+
+                index_data["entries"] = entries
+                index_store.save(drive, index_data)
+
+                results["success"] = True
+                results["deleted"] = True
+
+                # Best-effort Notion update: clear Slide Job ID
+                if notion_page_id and Config.NOTION_API_KEY:
+                    try:
+                        notion = NotionIntegration()
+                        notion.update_company_record(
+                            page_id=notion_page_id,
+                            google_drive_link=google_drive_link,
+                            clear_slide_job_id=True,
+                            status="deleted",
+                        )
+                    except Exception as e:
+                        results["errors"].append(f"Notion update (clear Slide Job ID) failed: {e}")
+
+                return jsonify(results), 200
+
+            except Exception as e:
+                results["errors"].append(f"Delete slide failed: {e}")
+                return jsonify(results), 500
         
         # Create temporary files for images
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -529,6 +721,8 @@ def handle_onboarding():
                 "docsend_link": None,
                 "notion_page_id": notion_metadata.get("page_id"),
                 "slide_job_id": company_data.get("slide_job_id"),
+                "canva_master_design_id": None,
+                "canva_master_design_url": None,
                 "errors": []
             }
             
@@ -721,6 +915,7 @@ def handle_onboarding():
                 google_drive_link = None
                 target_file_id = None
                 drive = None
+                master_pdf_bytes_for_canva = None
                 try:
                     drive = GoogleDriveIntegration()
 
@@ -778,6 +973,8 @@ def handle_onboarding():
                         )
                         results["google_drive_link"] = google_drive_link
                         print(f"✓ Uploaded new Drive PDF: {google_drive_link}")
+                        # For a fresh master file, the master bytes are just this slide PDF
+                        master_pdf_bytes_for_canva = slide_pdf_bytes
                         
                         # Initialize per-slide index (first slide = page 1)
                         try:
@@ -914,6 +1111,7 @@ def handle_onboarding():
                             merged_bytes = merged_buf.read()
                             google_drive_link = drive.overwrite_pdf(target_file_id, merged_bytes)
                             results["google_drive_link"] = google_drive_link
+                            master_pdf_bytes_for_canva = merged_bytes
                             if should_replace and replaced:
                                 print(f"✓ Replaced existing slide in Drive PDF: {google_drive_link}")
                             else:
@@ -957,159 +1155,59 @@ def handle_onboarding():
                                 folder_id=Config.GOOGLE_DRIVE_FOLDER_ID
                             )
                             results["google_drive_link"] = google_drive_link
+                            master_pdf_bytes_for_canva = slide_pdf_bytes
                             print(f"✓ Uploaded new Drive PDF (fallback): {google_drive_link}")
                 except Exception as e:
                     print(f"Warning: Google Drive upload failed: {e}")
                     results["errors"].append(f"Google Drive: {str(e)}")
+
+                # Keep Canva in sync with the *entire* master PDF (not just the new slide)
+                # This runs after create/edit/append and after deletions (handled above).
+                canva_master_design_id = None
+                canva_master_design_url = None
+                if master_pdf_bytes_for_canva:
+                    canva_master = _sync_master_pdf_to_canva(
+                        master_pdf_bytes_for_canva,
+                        filename=os.getenv("CANVA_MASTER_PDF_FILENAME") or static_file_name or "Portfolio Slides.pdf",
+                    )
+                    if canva_master and canva_master.get("status") == "success":
+                        canva_master_design_id = canva_master.get("design_id")
+                        canva_master_design_url = canva_master.get("design_url")
+                        results["canva_master_design_id"] = canva_master_design_id
+                        results["canva_master_design_url"] = canva_master_design_url
+                    elif canva_master and canva_master.get("status") == "failed":
+                        # Non-fatal; record for debugging
+                        results["errors"].append(f"Canva master PDF sync: {canva_master.get('error')}")
                 
-                # Step 8: Delete old Canva design if it exists
-                if existing_slides and existing_canva_design_id:
-                    try:
-                        has_canva_creds = (
-                            (Config.CANVA_API_KEY or (Config.CANVA_CLIENT_ID and Config.CANVA_CLIENT_SECRET))
-                        )
-                        if has_canva_creds:
-                            print(f"🗑️  Deleting old Canva design: {existing_canva_design_id}")
-                            canva = CanvaIntegration()
-                            canva.delete_design(existing_canva_design_id)
-                        else:
-                            print("⚠️  Canva credentials not configured, skipping deletion")
-                    except Exception as e:
-                        print(f"⚠️  Error deleting old Canva design: {e}")
-                        import traceback
-                        traceback.print_exc()
-                        # Continue anyway - we'll create new design
-                
-                # Step 9: Upload PDF to Canva as asset (required)
+                # Step 8/9: Canva individual-slide upload (DISABLED by default)
+                # We only want Canva to track the master PDF deck (see _sync_master_pdf_to_canva).
+                # If you ever need per-slide Canva designs again, set CANVA_UPLOAD_INDIVIDUAL_SLIDES=1.
                 canva_asset_id = None
                 canva_design_id = None
                 canva_design_url = None
-                try:
-                    has_canva_creds = (
-                        (Config.CANVA_API_KEY or (Config.CANVA_CLIENT_ID and Config.CANVA_CLIENT_SECRET))
-                        and Config.CANVA_TEMPLATE_ID
-                    )
-                    if has_canva_creds:
-                        # Ensure filename is defined (should be from Step 7, but double-check)
-                        if 'filename' not in locals():
-                            filename = f"{company_data.get('name', 'slide').replace(' ', '_')}_slide.pdf"
-                        
-                        canva = CanvaIntegration()
-                        
-                        # Check if we should append to existing Canva design
-                        static_canva_design_id = os.getenv("CANVA_STATIC_DESIGN_ID") or getattr(Config, "CANVA_STATIC_DESIGN_ID", None)
-                        target_canva_design_id = None
-                        
-                        # Priority: static design ID > existing design from Notion
-                        if static_canva_design_id:
-                            target_canva_design_id = static_canva_design_id
-                            print(f"   Using static Canva design ID: {target_canva_design_id}")
-                        elif existing_slides and existing_canva_design_id:
-                            target_canva_design_id = existing_canva_design_id
-                            print(f"   Found existing Canva design ID: {target_canva_design_id}")
-                        
-                        previous_design_id = target_canva_design_id
-                        
-                        if target_canva_design_id:
-                            # Append to existing design
-                            print("Appending slide to existing Canva design...")
-                            try:
-                                # Get existing PDF from Google Drive for merging (if available)
-                                # This is the source of truth since Canva API doesn't support PDF export
-                                existing_pdf_bytes = None
-                                if target_file_id and drive:
-                                    try:
-                                        existing_pdf_bytes = drive.download_file(target_file_id)
-                                        print(f"   Downloaded existing PDF from Google Drive ({len(existing_pdf_bytes)} bytes) for Canva merge")
-                                    except Exception as e:
-                                        print(f"   Could not download from Google Drive: {e}")
-                                        print(f"   (This is OK if it's the first slide)")
-                                        existing_pdf_bytes = None
-                                else:
-                                    print("   No Google Drive file ID available, using only new slide")
-                                
-                                canva_asset_id = canva.append_slide_to_design(
-                                    target_canva_design_id, 
-                                    slide_pdf_bytes, 
-                                    filename,
-                                    existing_pdf_bytes=existing_pdf_bytes
-                                )
-                                results["canva_asset_id"] = canva_asset_id
-                                
-                                # Check if it's a job ID (import job) or design ID
-                                import re
-                                is_job_id = re.match(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', canva_asset_id, re.IGNORECASE)
-                                if is_job_id:
-                                    # Wait for import completion and get design ID
-                                    print("Waiting for Canva import to complete...")
-                                    status_info = canva.wait_for_import_completion(canva_asset_id, max_wait_seconds=60, poll_interval=2)
-                                    if status_info.get('status') == 'success':
-                                        canva_design_id = status_info.get('design_id')
-                                        canva_design_url = status_info.get('design_url')
-                                        results["canva_design_id"] = canva_design_id
-                                        results["canva_design_url"] = canva_design_url
-                                        print(f"✓ Appended slide to Canva design: {canva_design_id}")
-                                        if canva_design_id and canva_design_id.startswith("DAG"):
-                                            Config.CANVA_STATIC_DESIGN_ID = canva_design_id
-                                            _update_env_var("CANVA_STATIC_DESIGN_ID", canva_design_id)
-                                            print(f"   Updated CANVA_STATIC_DESIGN_ID to {canva_design_id}")
-                                            if _should_delete_previous_design() and previous_design_id and previous_design_id != canva_design_id:
-                                                canva.delete_design(previous_design_id)
-                                    else:
-                                        print(f"⚠️  Canva import job did not complete successfully: {status_info.get('status')}")
-                                else:
-                                    # It's already a design ID
-                                    canva_design_id = canva_asset_id
-                                    results["canva_design_id"] = canva_design_id
-                                    print(f"✓ Appended slide to Canva design: {canva_design_id}")
-                                    if canva_design_id and canva_design_id.startswith("DAG"):
-                                        Config.CANVA_STATIC_DESIGN_ID = canva_design_id
-                                        _update_env_var("CANVA_STATIC_DESIGN_ID", canva_design_id)
-                                        print(f"   Updated CANVA_STATIC_DESIGN_ID to {canva_design_id}")
-                                        if _should_delete_previous_design() and previous_design_id and previous_design_id != canva_design_id:
-                                            canva.delete_design(previous_design_id)
-                            except Exception as e:
-                                print(f"⚠️  Failed to append to existing design: {e}")
-                                print("   Falling back to uploading as new design...")
-                                # Fall through to new design upload
-                                target_canva_design_id = None
-                        
-                        if not target_canva_design_id:
-                            # Upload as new design
-                            print("Uploading slide PDF to Canva as new design...")
+                if _truthy(os.getenv("CANVA_UPLOAD_INDIVIDUAL_SLIDES", "0")):
+                    try:
+                        has_canva_creds = (
+                            (Config.CANVA_API_KEY or (Config.CANVA_CLIENT_ID and Config.CANVA_CLIENT_SECRET))
+                            and Config.CANVA_TEMPLATE_ID
+                        )
+                        if has_canva_creds:
+                            # Ensure filename is defined (should be from Step 7, but double-check)
+                            if "filename" not in locals():
+                                filename = f"{company_data.get('name', 'slide').replace(' ', '_')}_slide.pdf"
+
+                            canva = CanvaIntegration()
+                            print("Uploading individual slide PDF to Canva (opt-in)...")
                             canva_asset_id = canva.upload_pdf_asset(slide_pdf_bytes, filename)
                             results["canva_asset_id"] = canva_asset_id
-                            
-                            # Check if it's a job ID (import job) or asset ID
-                            import re
-                            is_job_id = re.match(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', canva_asset_id, re.IGNORECASE)
-                            if is_job_id:
-                                # Wait for import completion and get design ID
-                                print("Waiting for Canva import to complete...")
-                                status_info = canva.wait_for_import_completion(canva_asset_id, max_wait_seconds=60, poll_interval=2)
-                                if status_info.get('status') == 'success':
-                                    canva_design_id = status_info.get('design_id')
-                                    canva_design_url = status_info.get('design_url')
-                                    results["canva_design_id"] = canva_design_id
-                                    results["canva_design_url"] = canva_design_url
-                                    print(f"✓ Created new Canva design: {canva_design_id}")
-                                    if canva_design_id and canva_design_id.startswith("DAG"):
-                                        Config.CANVA_STATIC_DESIGN_ID = canva_design_id
-                                        _update_env_var("CANVA_STATIC_DESIGN_ID", canva_design_id)
-                                        print(f"   Updated CANVA_STATIC_DESIGN_ID to {canva_design_id}")
-                                        if _should_delete_previous_design() and previous_design_id and previous_design_id != canva_design_id:
-                                            canva.delete_design(previous_design_id)
-                                else:
-                                    print(f"⚠️  Canva import job did not complete successfully: {status_info.get('status')}")
-                            else:
-                                print(f"✓ Uploaded PDF to Canva assets: {canva_asset_id}")
-                    else:
-                        print("Warning: Canva credentials not configured, skipping PDF upload")
-                        results["errors"].append("Canva PDF upload: Credentials not configured")
-                except Exception as e:
-                    print(f"Error: Canva PDF upload failed: {e}")
-                    results["errors"].append(f"Canva PDF upload: {str(e)}")
-                    # Don't fail the entire workflow, but log the error
+                        else:
+                            print("Warning: Canva credentials not configured, skipping individual-slide upload")
+                            results["errors"].append("Canva individual slide upload: Credentials not configured")
+                    except Exception as e:
+                        print(f"Error: Canva individual-slide upload failed: {e}")
+                        results["errors"].append(f"Canva individual slide upload: {str(e)}")
+                else:
+                    print("Skipping individual slide upload to Canva (master deck sync only).")
                 
                 # Step 10: DocSend (optional - uses Google Drive sync)
                 print("DocSend integration via Google Drive...")

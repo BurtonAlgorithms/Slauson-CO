@@ -72,6 +72,17 @@ class CanvaTokenStore:
         """
         Load tokens from the best available store.
         """
+        drive_tokens = None
+        local_tokens = None
+
+        def _token_ts(toks: Optional[Dict[str, Any]]) -> float:
+            try:
+                if not toks:
+                    return 0.0
+                return float(toks.get("token_refreshed_at") or 0.0)
+            except Exception:
+                return 0.0
+
         # 1) Drive
         if self._drive_available():
             try:
@@ -94,7 +105,7 @@ class CanvaTokenStore:
                     self.cfg.drive_file_id = file_id
                     if tokens.get("access_token") or tokens.get("refresh_token"):
                         print("✓ Loaded Canva OAuth tokens from Google Drive token store")
-                        return tokens
+                        drive_tokens = tokens
             except Exception as e:
                 print(f"Warning: could not load Canva tokens from Google Drive store: {e}")
 
@@ -105,9 +116,22 @@ class CanvaTokenStore:
                     tokens = json.load(f)
                 if tokens.get("access_token") or tokens.get("refresh_token"):
                     print("✓ Loaded Canva OAuth tokens from local token file")
-                    return tokens
+                    local_tokens = tokens
         except Exception as e:
             print(f"Warning: could not load Canva tokens from local file: {e}")
+
+        # If we have both, prefer the most recently refreshed token set.
+        if drive_tokens or local_tokens:
+            chosen = drive_tokens
+            if _token_ts(local_tokens) > _token_ts(drive_tokens):
+                chosen = local_tokens
+                # Auto-sync newest local tokens back to Drive so the server uses updated scopes.
+                if self._drive_available():
+                    try:
+                        self.save(local_tokens)  # best effort
+                    except Exception:
+                        pass
+            return chosen
 
         # 3) Env fallback (read-only)
         env_refresh_token = os.getenv("CANVA_REFRESH_TOKEN")

@@ -28,7 +28,50 @@ class CanvaIntegration:
         self._refresh_token = None
         self.token_file = "canva_tokens.json"
         self._token_store = CanvaTokenStore.from_env()
+        # Optional: move imported designs into a specific Canva folder
+        self.destination_folder_id = (
+            os.getenv("CANVA_DESTINATION_FOLDER_ID")
+            or os.getenv("CANVA_FOLDER_ID")
+            or None
+        )
         self._load_tokens()
+
+    def move_item_to_folder(self, item_id: str, to_folder_id: str) -> bool:
+        """
+        Move a Canva item (design) into a Canva folder.
+
+        Requires OAuth scope: folder:write
+        Docs: POST /rest/v1/folders/move
+        """
+        if not item_id or not to_folder_id:
+            return False
+
+        endpoint = f"{self.base_url}/folders/move"
+        resp = self._make_authenticated_request(
+            "post",
+            endpoint,
+            json={"to_folder_id": to_folder_id, "item_id": item_id},
+            headers={"Content-Type": "application/json"},
+        )
+
+        # Success is 204 No Content (per docs) but some APIs may return 200.
+        if resp.status_code in (200, 204):
+            print(f"✓ Moved Canva design {item_id} to folder {to_folder_id}")
+            return True
+
+        # Helpful hints on common errors
+        body = (resp.text or "")[:300]
+        if resp.status_code in (401, 403):
+            raise Exception(
+                f"Move-to-folder failed ({resp.status_code}). "
+                f"Your Canva OAuth token likely needs the `folder:write` scope. Response: {body}"
+            )
+        if "item_in_multiple_folders" in body:
+            raise Exception(
+                "Move-to-folder failed: item exists in multiple folders. "
+                "Canva requires moving it manually in the UI in this case."
+            )
+        raise Exception(f"Move-to-folder failed ({resp.status_code}): {body}")
     
     def create_portfolio_slide(
         self,
@@ -837,6 +880,15 @@ class CanvaIntegration:
             print(f"   Import job status: {status}")
             
             if status in ['success', 'failed']:
+                # On success, optionally move the created design into a destination folder
+                if status == "success":
+                    design_id = status_info.get("design_id")
+                    if design_id and self.destination_folder_id:
+                        try:
+                            print(f"Moving Canva design into folder {self.destination_folder_id}...")
+                            self.move_item_to_folder(design_id, self.destination_folder_id)
+                        except Exception as e:
+                            print(f"⚠️  Could not move design to folder: {e}")
                 return status_info
             
             # Wait before next poll

@@ -41,6 +41,9 @@ SCOPES = [
     "brandtemplate:content:read",
     "asset:read",
     "asset:write",
+    # Needed to move imported designs into a Canva folder via /folders/move
+    "folder:read",
+    "folder:write",
 ]
 
 TOKEN_FILE = "canva_tokens.json"
@@ -312,6 +315,7 @@ def setup_oauth():
     print("✅ Found Canva credentials in .env")
     print(f"   Client ID: {client_id[:20]}...")
     print(f"   Redirect URI: {redirect_uri}")
+    print(f"   Requested scopes: {' '.join(SCOPES)}")
     print()
     print("This will:")
     print("1. Open a browser for you to log in to Canva")
@@ -436,6 +440,20 @@ def setup_oauth():
         if "access_token" not in tokens:
             print(f"❌ No access token in response: {tokens}")
             return False
+
+        # Best-effort: show granted scopes if Canva returns them in JWT payload
+        try:
+            import base64
+            access_token = tokens.get("access_token", "")
+            if access_token.count(".") >= 2:
+                _h, payload_b64, _s = access_token.split(".", 2)
+                payload_b64 += "=" * (-len(payload_b64) % 4)
+                payload = json.loads(base64.urlsafe_b64decode(payload_b64.encode("utf-8")))
+                granted = payload.get("scopes") or payload.get("scope")
+                if granted:
+                    print(f"   Granted scopes: {granted}")
+        except Exception:
+            pass
         
         print("✓ Got access token and refresh token")
         print()

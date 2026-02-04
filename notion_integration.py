@@ -214,6 +214,7 @@ class NotionIntegration:
         canva_design_id: Optional[str] = None,
         canva_design_url: Optional[str] = None,
         slide_job_id: Optional[str] = None,
+        clear_slide_job_id: bool = False,
         status: str = "completed"
     ) -> bool:
         """
@@ -269,7 +270,12 @@ class NotionIntegration:
                     pass
 
         # Update Slide Job ID if provided (exact property name requested)
-        if slide_job_id:
+        if clear_slide_job_id:
+            try:
+                properties["Slide Job ID"] = {"rich_text": []}
+            except Exception:
+                pass
+        elif slide_job_id:
             try:
                 properties["Slide Job ID"] = {"rich_text": [{"text": {"content": slide_job_id}}]}
             except Exception:
