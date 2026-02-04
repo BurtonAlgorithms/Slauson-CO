@@ -206,13 +206,37 @@ class HTMLSlideGenerator:
             try:
                 if os.path.exists(path) or not os.path.isabs(path):
                     # Only check existence for absolute paths
-                    return ImageFont.truetype(path, size)
+                    font = ImageFont.truetype(path, size)
+                    if os.getenv("DEBUG_FONTS", "").strip() in ("1", "true", "yes", "y", "on"):
+                        print(f"✓ Loaded font: {path} (size={size}, bold={bold})")
+                    return font
             except (OSError, IOError, Exception) as e:
                 # Silently continue to next candidate
                 continue
         
-        # Final fallback - always works
-        print(f"Warning: Could not load custom font, using default font for size {size}")
+        # Fallback: Pillow bundles DejaVu fonts in most builds; use them if available.
+        # This keeps text sizing consistent even in minimal containers (Railway/Nixpacks).
+        try:
+            import PIL
+
+            pil_fonts_dir = os.path.join(os.path.dirname(PIL.__file__), "fonts")
+            pil_font_path = os.path.join(
+                pil_fonts_dir,
+                "DejaVuSans-Bold.ttf" if bold else "DejaVuSans.ttf",
+            )
+            if os.path.exists(pil_font_path):
+                font = ImageFont.truetype(pil_font_path, size)
+                if os.getenv("DEBUG_FONTS", "").strip() in ("1", "true", "yes", "y", "on"):
+                    print(f"✓ Loaded font (Pillow bundled): {pil_font_path} (size={size}, bold={bold})")
+                return font
+        except Exception:
+            pass
+
+        # Final fallback: bitmap default (NOTE: ignores `size`, will look tiny).
+        print(
+            "Warning: Could not load any TrueType font (custom/system/Pillow-bundled). "
+            f"Falling back to PIL default bitmap font (requested size={size})."
+        )
         return ImageFont.load_default()
 
     def _make_white_background_transparent(self, img: Image.Image, threshold: int = 245) -> Image.Image:
