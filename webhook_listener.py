@@ -7,10 +7,7 @@ import os
 os.environ.setdefault('NUMBA_DISABLE_JIT', '1')
 
 from flask import Flask, request, jsonify, redirect, session
-from main import PortfolioOnboardingAutomation
-from image_processor import ImageProcessor
 from canva_integration import CanvaIntegration
-from html_slide_generator import HTMLSlideGenerator
 from google_drive_integration import GoogleDriveIntegration
 from docsend_integration import DocSendIntegration
 from notion_integration import NotionIntegration
@@ -727,6 +724,11 @@ def handle_onboarding():
             }
             
             try:
+                # Lazy imports to keep server startup fast and avoid heavy imports on processes
+                # that only need delete behavior.
+                from image_processor import ImageProcessor
+                from html_slide_generator import HTMLSlideGenerator
+
                 # Step 1: Process headshots with Gemini (background removal, greyscale, combine)
                 print("Processing headshots with Gemini...")
                 headshot_paths = []
