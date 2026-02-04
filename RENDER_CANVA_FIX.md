@@ -3,31 +3,39 @@
 ## Problem
 Error: `"Token lineage has been revoked"` - The Canva refresh token in Render is invalid/expired.
 
-## Solution: Generate New Tokens
+## Solution: Re-authorize and persist tokens (no scripts)
 
-### Step 1: Generate New Canva Tokens Locally
+### Step 1: Re-authorize via the running server
 
-1. **Set up Canva OAuth locally** (with the new company's Canva account):
+1. Ensure these env vars are set in Render:
+   - `CANVA_CLIENT_ID`
+   - `CANVA_CLIENT_SECRET`
+   - `CANVA_REDIRECT_URI` (must exactly match the redirect URI in your Canva app, e.g. `https://your-app.onrender.com/oauth/canva/callback`)
+   - `FLASK_SECRET_KEY` (any long random string)
 
-   ```bash
-   # Set your Canva app credentials
-   export CANVA_CLIENT_ID="your_new_client_id"
-   export CANVA_CLIENT_SECRET="your_new_client_secret"
-   
-   # Run the OAuth setup
-   python setup_canva_oauth.py
-   ```
+2. Visit this URL in your browser (while logged into the right Canva account):
 
-2. **This will create `canva_tokens.json`** with fresh tokens
+   `https://your-app.onrender.com/oauth/canva/start`
 
-3. **Read the tokens** from `canva_tokens.json`:
-   ```bash
-   cat canva_tokens.json
-   ```
+3. Approve the app. After redirect, you should see a success message.
 
-### Step 2: Update Render Environment Variables
+4. Tokens are saved automatically (and will auto-refresh). For best persistence across restarts, configure the Google Drive token store (see below).
 
-Go to your Render dashboard > Environment Variables and update these:
+### Optional: persist tokens in Google Drive (recommended)
+
+If your server has Google Drive OAuth configured, set:
+
+```bash
+CANVA_TOKEN_STORE_DRIVE_FILE_NAME=canva_tokens.json
+# Optional: choose a folder (defaults to GOOGLE_DRIVE_FOLDER_ID if set)
+CANVA_TOKEN_STORE_DRIVE_FOLDER_ID=your_folder_id
+```
+
+This stores Canva tokens in a private JSON file on Drive so refresh survives restarts without manual env var updates.
+
+### If you still prefer env-var tokens
+
+Go to your Render dashboard > Environment Variables and update these (tokens can be obtained from local flow if needed):
 
 #### Required Canva Variables:
 

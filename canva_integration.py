@@ -8,6 +8,7 @@ from typing import Dict, Optional, BinaryIO
 from config import Config
 import base64
 import io
+from canva_token_store import CanvaTokenStore
 
 
 class CanvaIntegration:
@@ -26,6 +27,7 @@ class CanvaIntegration:
         self._access_token = None
         self._refresh_token = None
         self.token_file = "canva_tokens.json"
+        self._token_store = CanvaTokenStore.from_env()
         self._load_tokens()
     
     def create_portfolio_slide(
@@ -844,60 +846,32 @@ class CanvaIntegration:
         raise Exception(f"Import job {job_id} did not complete within {max_wait_seconds} seconds")
     
     def _load_tokens(self):
-        """Load stored OAuth tokens from environment variables or file."""
-        # Priority 1: Check environment variables (for Render persistence)
-        env_refresh_token = os.getenv("CANVA_REFRESH_TOKEN")
-        env_access_token = os.getenv("CANVA_ACCESS_TOKEN")
-        env_token_refreshed_at = os.getenv("CANVA_TOKEN_REFRESHED_AT")
-        
-        if env_refresh_token:
-            self._refresh_token = env_refresh_token
-            if env_access_token:
-                self._access_token = env_access_token
-            if env_token_refreshed_at:
-                try:
-                    import time
-                    token_refreshed_at = float(env_token_refreshed_at)
+        """Load stored OAuth tokens from the best available store."""
+        tokens = None
+        try:
+            tokens = self._token_store.load()
+        except Exception as e:
+            print(f"Warning: could not load Canva tokens: {e}")
+
+        if tokens:
+            self._access_token = tokens.get("access_token")
+            self._refresh_token = tokens.get("refresh_token")
+
+            # Log token age if present
+            try:
+                import time
+
+                token_refreshed_at = float(tokens.get("token_refreshed_at", 0) or 0)
+                if token_refreshed_at and self._access_token:
                     current_time = time.time()
                     time_since_refresh = current_time - token_refreshed_at
                     hours_since_refresh = time_since_refresh / 3600
-                    
-                    if self._access_token:
-                        print("✓ Loaded Canva OAuth tokens from environment variables")
-                        if time_since_refresh > 14400:  # 4 hours
-                            print(f"   Token is {hours_since_refresh:.1f} hours old (>4 hours), will refresh before next request")
-                        else:
-                            print(f"   Token is {hours_since_refresh:.1f} hours old (still valid)")
-                except (ValueError, TypeError):
-                    pass
-            elif self._access_token:
-                print("✓ Loaded Canva OAuth tokens from environment variables")
-            return
-        
-        # Priority 2: Load from file (for local development)
-        if os.path.exists(self.token_file):
-            try:
-                import json
-                import time
-                with open(self.token_file, 'r') as f:
-                    tokens = json.load(f)
-                    self._access_token = tokens.get("access_token")
-                    self._refresh_token = tokens.get("refresh_token")
-                    token_refreshed_at = tokens.get("token_refreshed_at", 0)
-                    
-                    if self._access_token:
-                        print("✓ Loaded stored Canva OAuth tokens from file")
-                        # Check if token is older than 4 hours (14400 seconds)
-                        current_time = time.time()
-                        time_since_refresh = current_time - token_refreshed_at
-                        hours_since_refresh = time_since_refresh / 3600
-                        
-                        if time_since_refresh > 14400:  # 4 hours
-                            print(f"   Token is {hours_since_refresh:.1f} hours old (>4 hours), will refresh before next request")
-                        else:
-                            print(f"   Token is {hours_since_refresh:.1f} hours old (still valid)")
-            except Exception as e:
-                print(f"Warning: Could not load tokens from {self.token_file}: {e}")
+                    if time_since_refresh > 14400:
+                        print(f"   Token is {hours_since_refresh:.1f} hours old (>4 hours), will refresh before next request")
+                    else:
+                        print(f"   Token is {hours_since_refresh:.1f} hours old (still valid)")
+            except Exception:
+                pass
     
     def _save_tokens(self, tokens: dict):
         """Save OAuth tokens to file and update in-memory cache."""
@@ -911,24 +885,19 @@ class CanvaIntegration:
             # Update in-memory cache
             self._access_token = tokens.get("access_token")
             self._refresh_token = tokens.get("refresh_token")
-            
-            # Save to file (for local development)
-            # Note: On Render, tokens should be set via environment variables
-            # This file save is for local development convenience
+
+            # Persist tokens (Drive + local file best-effort)
             try:
-                with open(self.token_file, 'w') as f:
-                    json.dump(tokens, f, indent=2)
-            except Exception as file_error:
-                # File save failed (might be on Render with read-only filesystem)
-                # That's okay, we have the tokens in memory
-                pass
-            
-            # If we're using environment variables (Render), log that tokens were refreshed
-            # User will need to manually update CANVA_REFRESH_TOKEN in Render dashboard if it changes
-            if os.getenv("CANVA_REFRESH_TOKEN"):
-                print("   ⚠️  Note: Tokens refreshed. Update CANVA_REFRESH_TOKEN in Render dashboard if refresh token changed.")
+                self._token_store.save(tokens)
+            except Exception as e:
+                # Best effort only
+                print(f"Warning: could not persist Canva tokens: {e}")
         except Exception as e:
             print(f"Warning: Could not save tokens: {e}")
+
+    def save_tokens(self, tokens: dict) -> None:
+        """Public wrapper to persist tokens (used by web OAuth callback)."""
+        self._save_tokens(tokens)
     
     def _refresh_access_token(self) -> str:
         """Refresh access token using refresh token."""

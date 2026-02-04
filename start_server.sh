@@ -6,7 +6,12 @@
 cd "$(dirname "$0")"
 
 # Activate virtual environment
-source venv/bin/activate
+if [ -f "venv/bin/activate" ]; then
+  # shellcheck disable=SC1091
+  source venv/bin/activate
+else
+  echo "Note: no ./venv found; using current Python environment ($(python --version 2>/dev/null || echo 'python not found'))."
+fi
 
 # Get port from argument or use default
 PORT=${1:-5001}

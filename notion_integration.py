@@ -213,6 +213,7 @@ class NotionIntegration:
         docsend_link: Optional[str] = None,
         canva_design_id: Optional[str] = None,
         canva_design_url: Optional[str] = None,
+        slide_job_id: Optional[str] = None,
         status: str = "completed"
     ) -> bool:
         """
@@ -266,6 +267,13 @@ class NotionIntegration:
                     break
                 except:
                     pass
+
+        # Update Slide Job ID if provided (exact property name requested)
+        if slide_job_id:
+            try:
+                properties["Slide Job ID"] = {"rich_text": [{"text": {"content": slide_job_id}}]}
+            except Exception:
+                pass
         
         # Update status
         if status:
@@ -351,6 +359,18 @@ class NotionIntegration:
                     if prop.get("type") == "url":
                         company_data["canva_design_url"] = prop.get("url")
                         break
+
+            # Extract Slide Job ID
+            if "Slide Job ID" in properties:
+                prop = properties["Slide Job ID"]
+                if prop.get("type") == "rich_text":
+                    rich_text = prop.get("rich_text", [])
+                    if rich_text:
+                        company_data["slide_job_id"] = " ".join([t.get("plain_text", "") for t in rich_text]).strip()
+                elif prop.get("type") == "title":
+                    title = prop.get("title", [])
+                    if title:
+                        company_data["slide_job_id"] = " ".join([t.get("plain_text", "") for t in title]).strip()
             
             return company_data if company_data else None
         except Exception as e:

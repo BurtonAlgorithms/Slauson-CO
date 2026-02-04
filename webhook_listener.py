@@ -6,7 +6,7 @@ import os
 # Disable numba JIT compilation to avoid timeout issues on Render
 os.environ.setdefault('NUMBA_DISABLE_JIT', '1')
 
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, redirect, session
 from main import PortfolioOnboardingAutomation
 from image_processor import ImageProcessor
 from canva_integration import CanvaIntegration
@@ -23,8 +23,88 @@ import io
 import requests
 from urllib.parse import urlparse
 from typing import Optional
+import uuid
+import time
+
+from slide_job_index_store import SlideJobIndexStore
 
 app = Flask(__name__)
+# Needed for storing PKCE verifier during OAuth redirects.
+# Set FLASK_SECRET_KEY in production for stable sessions.
+app.secret_key = os.getenv("FLASK_SECRET_KEY", os.urandom(32))
+
+# --- Canva OAuth via browser (no scripts) ---
+# This allows one-time human login from a browser, then tokens persist/refresh automatically.
+try:
+    from setup_canva_oauth import generate_pkce, get_authorization_url, exchange_code_for_token
+except Exception:
+    generate_pkce = get_authorization_url = exchange_code_for_token = None
+
+
+@app.get("/oauth/canva/start")
+def canva_oauth_start():
+    if not generate_pkce or not get_authorization_url:
+        return (
+            "Canva OAuth helpers not available. Ensure `setup_canva_oauth.py` exists and dependencies are installed.",
+            500,
+        )
+
+    if not Config.CANVA_CLIENT_ID or not Config.CANVA_CLIENT_SECRET:
+        return (
+            "Missing CANVA_CLIENT_ID / CANVA_CLIENT_SECRET. Set them in your environment and try again.",
+            400,
+        )
+
+    redirect_uri = os.getenv("CANVA_REDIRECT_URI")
+    if not redirect_uri:
+        # Safe default for local dev
+        redirect_uri = "http://127.0.0.1:5001/oauth/canva/callback"
+
+    code_verifier, code_challenge = generate_pkce()
+    session["canva_code_verifier"] = code_verifier
+    session["canva_redirect_uri"] = redirect_uri
+
+    auth_url = get_authorization_url(Config.CANVA_CLIENT_ID, code_challenge, redirect_uri)
+    return redirect(auth_url)
+
+
+@app.get("/oauth/canva/callback")
+def canva_oauth_callback():
+    if not exchange_code_for_token:
+        return ("Canva OAuth helpers not available.", 500)
+
+    error = request.args.get("error")
+    if error:
+        return (f"Canva OAuth error: {error}", 400)
+
+    code = request.args.get("code")
+    if not code:
+        return ("Missing `code` in callback.", 400)
+
+    code_verifier = session.get("canva_code_verifier")
+    redirect_uri = session.get("canva_redirect_uri") or os.getenv("CANVA_REDIRECT_URI")
+    if not code_verifier:
+        return (
+            "Missing PKCE verifier (session expired). Re-run `/oauth/canva/start`.",
+            400,
+        )
+
+    tokens = exchange_code_for_token(
+        Config.CANVA_CLIENT_ID,
+        Config.CANVA_CLIENT_SECRET,
+        code,
+        code_verifier,
+        redirect_uri,
+    )
+
+    # Persist via CanvaIntegration (uses Drive token store if configured)
+    canva = CanvaIntegration()
+    canva.save_tokens(tokens)
+
+    return (
+        "✅ Canva authorized. Tokens saved. You can close this tab and use the webhook normally.",
+        200,
+    )
 
 def _update_env_var(key: str, value: str, env_path: str = ".env") -> None:
     """Update or add a single env var in .env for local persistence."""
@@ -267,6 +347,17 @@ def handle_onboarding():
                 company_data["co_investors"] = [c.strip() for c in co_investors_str.split(",") if c.strip()]
             else:
                 company_data["co_investors"] = []
+
+        # Accept Slide Job ID from payload (nested or flat), normalize key
+        if "slide_job_id" not in company_data:
+            slide_job_id_from_payload = (
+                data.get("slide_job_id")
+                or data.get("Slide Job ID")
+                or data.get("company_data__slide_job_id")
+                or data.get("company_data__Slide Job ID")
+            )
+            if slide_job_id_from_payload:
+                company_data["slide_job_id"] = str(slide_job_id_from_payload).strip()
         
         print(f"Company data extracted: {list(company_data.keys())}")
         print(f"Company name: '{company_data.get('name', '')}'")
@@ -318,6 +409,12 @@ def handle_onboarding():
             "created_time": data.get("notion_created_time"),
             "last_edited": data.get("notion_last_edited")
         }
+
+        # Ensure we have a Slide Job ID for this run (used for per-slide tracking + Notion property)
+        # Prefer an incoming Slide Job ID from Notion/Zapier; otherwise generate one.
+        if not company_data.get("slide_job_id"):
+            base = notion_metadata.get("page_id") or "local"
+            company_data["slide_job_id"] = f"{base}-{uuid.uuid4().hex[:12]}"
         
         # Create temporary files for images
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -431,6 +528,7 @@ def handle_onboarding():
                 "google_drive_link": None,
                 "docsend_link": None,
                 "notion_page_id": notion_metadata.get("page_id"),
+                "slide_job_id": company_data.get("slide_job_id"),
                 "errors": []
             }
             
@@ -591,6 +689,7 @@ def handle_onboarding():
                 existing_slides = False
                 existing_google_drive_link = None
                 existing_canva_design_id = None
+                existing_slide_job_id = None
                 
                 if notion_page_id and Config.NOTION_API_KEY:
                     try:
@@ -600,6 +699,7 @@ def handle_onboarding():
                             # Check if this page already has slides
                             existing_google_drive_link = existing_data.get("google_drive_link")
                             existing_canva_design_id = existing_data.get("canva_design_id")
+                            existing_slide_job_id = existing_data.get("slide_job_id")
                             
                             if existing_google_drive_link or existing_canva_design_id:
                                 existing_slides = True
@@ -678,6 +778,23 @@ def handle_onboarding():
                         )
                         results["google_drive_link"] = google_drive_link
                         print(f"✓ Uploaded new Drive PDF: {google_drive_link}")
+                        
+                        # Initialize per-slide index (first slide = page 1)
+                        try:
+                            target_file_id = drive.extract_file_id_from_url(google_drive_link) or target_file_id
+                            index_store = SlideJobIndexStore.from_env(drive_folder_id)
+                            index_data = {"version": 1, "entries": {}}
+                            if notion_page_id:
+                                index_data["entries"][str(notion_page_id)] = {
+                                    "slide_job_id": (company_data.get("slide_job_id") or "").strip(),
+                                    "page_index": 0,
+                                    "drive_file_id": target_file_id,
+                                    "updated_at": time.time(),
+                                }
+                                index_store.save(drive, index_data)
+                                print("✓ Initialized Slide Job index (page 1)")
+                        except Exception as e:
+                            print(f"Warning: could not initialize Slide Job index store: {e}")
                     else:
                         try:
                             print("   Downloading target Drive PDF...")
@@ -688,38 +805,96 @@ def handle_onboarding():
                             # Check if we should replace existing slide for this company
                             # If the same Notion page is being edited, replace the old slide instead of appending
                             company_name = company_data.get('name', '').lower().strip()
-                            should_replace = existing_slides and notion_page_id
+                            slide_job_id = (company_data.get("slide_job_id") or "").strip()
+
+                            # Allow manual "edit existing slide" runs without relying on Notion API:
+                            # - If force_replace=true in payload, we will try to replace.
+                            # - If we already have an index entry for this notion_page_id, we will replace.
+                            force_replace = str(data.get("force_replace", "")).strip().lower() in ("1", "true", "yes", "y")
+
+                            # Load the index once (Drive-backed)
+                            index_store = SlideJobIndexStore.from_env(drive_folder_id)
+                            try:
+                                index_data = index_store.load(drive)
+                            except Exception as e:
+                                print(f"   Warning: could not load slide job index: {e}")
+                                index_data = {"version": 1, "entries": {}}
+                            entries = index_data.get("entries", {}) if isinstance(index_data, dict) else {}
+
+                            # Support replacing by slide_job_id even if notion_page_id isn't present in payload
+                            notion_page_id_for_index = notion_page_id
+                            if not notion_page_id_for_index and slide_job_id:
+                                for pid, info in entries.items():
+                                    if isinstance(info, dict) and info.get("slide_job_id") == slide_job_id:
+                                        notion_page_id_for_index = pid
+                                        break
+
+                            # Replace (edit) if this Notion page already has a slide in our index,
+                            # or if the caller explicitly forces replacement.
+                            # This does NOT rely on Notion API lookups; the Drive-backed index is source-of-truth.
+                            has_index_entry = bool(notion_page_id_for_index and notion_page_id_for_index in entries)
+                            should_replace = bool(notion_page_id_for_index and (force_replace or has_index_entry))
                             
                             if should_replace:
-                                print(f"   Replacing existing slide for company '{company_name}' (Notion page edited)...")
-                                # Try to find and remove the old slide for this company
-                                # Extract company name from PDF pages to identify which page to replace
+                                print(f"   Replacing existing slide for Notion page '{notion_page_id_for_index}'...")
                                 writer = PdfWriter()
                                 replaced = False
-                                
-                                # Try to identify the company's slide by checking page text
-                                for i, page in enumerate(old_reader.pages):
+                                replaced_index = None
+
+                                # Primary: look up by notion_page_id
+                                old_index = None
+                                if notion_page_id_for_index and notion_page_id_for_index in entries:
                                     try:
-                                        page_text = page.extract_text().lower()
-                                        # Check if this page contains the company name
-                                        if company_name and company_name in page_text:
-                                            print(f"   Found old slide for '{company_name}' at page {i+1}, replacing it...")
-                                            # Skip this page (replace with new slide)
+                                        old_index = int(entries[notion_page_id_for_index].get("page_index"))
+                                    except Exception:
+                                        old_index = None
+
+                                # Secondary: use the old Slide Job ID stored on the Notion record (if present)
+                                if old_index is None and existing_slide_job_id:
+                                    for pid, info in entries.items():
+                                        if isinstance(info, dict) and info.get("slide_job_id") == existing_slide_job_id:
+                                            try:
+                                                old_index = int(info.get("page_index"))
+                                                break
+                                            except Exception:
+                                                pass
+
+                                if old_index is not None and 0 <= old_index < len(old_reader.pages):
+                                    print(f"   Found old slide by index at page {old_index + 1}, replacing it...")
+                                    for i, page in enumerate(old_reader.pages):
+                                        if i == old_index:
                                             replaced = True
-                                            # Add new slide in its place
+                                            replaced_index = i
                                             for new_page in new_reader.pages:
                                                 writer.add_page(new_page)
                                         else:
-                                            # Keep pages that don't match this company
                                             writer.add_page(page)
-                                    except Exception as e:
-                                        # If text extraction fails, keep the page
-                                        print(f"   Warning: Could not extract text from page {i+1}: {e}")
-                                        writer.add_page(page)
-                                
-                                # If we didn't find a matching page, append the new slide
+                                else:
+                                    # Fallback: legacy matching by extracted text (may fail for image-based PDFs)
+                                    print("   No stored page index found; attempting fallback match by extracted text...")
+                                    for i, page in enumerate(old_reader.pages):
+                                        try:
+                                            page_text = (page.extract_text() or "").lower()
+                                            if existing_slide_job_id and existing_slide_job_id.lower() in page_text:
+                                                print(f"   Found old slide by Slide Job ID at page {i+1}, replacing it...")
+                                                replaced = True
+                                                replaced_index = i
+                                                for new_page in new_reader.pages:
+                                                    writer.add_page(new_page)
+                                            elif company_name and company_name in page_text:
+                                                print(f"   Found old slide for '{company_name}' at page {i+1}, replacing it...")
+                                                replaced = True
+                                                replaced_index = i
+                                                for new_page in new_reader.pages:
+                                                    writer.add_page(new_page)
+                                            else:
+                                                writer.add_page(page)
+                                        except Exception as e:
+                                            print(f"   Warning: Could not extract text from page {i+1}: {e}")
+                                            writer.add_page(page)
+
                                 if not replaced:
-                                    print(f"   Could not find old slide for '{company_name}', appending new slide...")
+                                    print("   Could not find old slide; appending new slide at end...")
                                     for p in old_reader.pages:
                                         writer.add_page(p)
                                     for p in new_reader.pages:
@@ -743,6 +918,37 @@ def handle_onboarding():
                                 print(f"✓ Replaced existing slide in Drive PDF: {google_drive_link}")
                             else:
                                 print(f"✓ Overwrote existing Drive PDF (DocSend-friendly): {google_drive_link}")
+
+                            # Persist/update Slide Job index after merge (Drive-backed).
+                            try:
+                                index_store = SlideJobIndexStore.from_env(drive_folder_id)
+                                try:
+                                    index_data = index_store.load(drive)
+                                except Exception:
+                                    index_data = {"version": 1, "entries": {}}
+
+                                entries = index_data.get("entries", {}) if isinstance(index_data, dict) else {}
+
+                                # Determine the page index where the new slide lives (single-page assumption).
+                                if should_replace and replaced and "replaced_index" in locals() and replaced_index is not None:
+                                    new_page_index = int(replaced_index)
+                                elif should_replace and replaced:
+                                    new_page_index = None
+                                else:
+                                    new_page_index = len(old_reader.pages)
+
+                                if notion_page_id and new_page_index is not None:
+                                    entries[str(notion_page_id)] = {
+                                        "slide_job_id": slide_job_id,
+                                        "page_index": int(new_page_index),
+                                        "drive_file_id": target_file_id,
+                                        "updated_at": time.time(),
+                                    }
+                                    index_data["entries"] = entries
+                                    index_store.save(drive, index_data)
+                                    print(f"✓ Updated Slide Job index: page {new_page_index + 1}")
+                            except Exception as e:
+                                print(f"Warning: could not update Slide Job index store: {e}")
                         except Exception as e:
                             print(f"⚠️  Append/overwrite failed, uploading new file instead: {e}")
                             google_drive_link = drive.upload_pdf(
@@ -946,6 +1152,7 @@ def handle_onboarding():
                             docsend_link=docsend_link,
                             canva_design_id=canva_design_id,
                             canva_design_url=canva_design_url,
+                            slide_job_id=company_data.get("slide_job_id"),
                             status="completed"
                         )
                         if existing_slides:

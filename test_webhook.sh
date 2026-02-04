@@ -3,7 +3,7 @@
 # Test webhook with realistic payload
 # Usage: ./test_webhook.sh
 
-WEBHOOK_URL="https://sauson-automation-3.onrender.com/webhook/onboarding"
+WEBHOOK_URL="http://localhost:5001/webhook/onboarding"
 PAYLOAD_FILE="test_real_payload.json"
 
 echo "Testing webhook at: $WEBHOOK_URL"

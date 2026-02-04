@@ -103,12 +103,75 @@ class HTMLSlideGenerator:
                     print(f"✓ Found map template at: {self.map_template_path}")
                     break
 
-    def _load_font(self, size: int, bold: bool = False):
+    def _load_font(self, size: int, bold: bool = False, preferred_family: Optional[str] = None):
         """
         Load a font with robust fallbacks that work on Render.
         Tries common system fonts, then DejaVu (available in most containers), then default.
         """
         font_candidates = []
+        
+        # Optional: try a preferred font family first (e.g., "Trouble")
+        if preferred_family:
+            try:
+                fam = preferred_family.strip()
+            except Exception:
+                fam = str(preferred_family)
+            fam_lower = fam.lower()
+            
+            # 1) Project-bundled fonts (recommended for consistency)
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            bundled_dirs = [
+                os.path.join(script_dir, "assets", "fonts"),
+                os.path.join(script_dir, "assets", "font"),
+                os.path.join(script_dir, "fonts"),
+            ]
+            bundled_names = [
+                f"{fam}.ttf",
+                f"{fam}.otf",
+                f"{fam} Font.ttf",
+                f"{fam} Font.otf",
+                f"{fam.replace(' ', '')}.ttf",
+                f"{fam.replace(' ', '')}.otf",
+                f"{fam}-Regular.ttf",
+                f"{fam}-Regular.otf",
+                f"{fam}-Bold.ttf",
+                f"{fam}-Bold.otf",
+            ]
+            for d in bundled_dirs:
+                for n in bundled_names:
+                    font_candidates.append(os.path.join(d, n))
+            
+            # 2) Common OS font folders (local dev)
+            system_dirs = [
+                os.path.expanduser("~/Library/Fonts"),
+                "/Library/Fonts",
+                "/System/Library/Fonts",
+                "/usr/share/fonts",
+                "/usr/local/share/fonts",
+            ]
+            for d in system_dirs:
+                try:
+                    if not os.path.isdir(d):
+                        continue
+                    for fname in os.listdir(d):
+                        if fam_lower in fname.lower() and fname.lower().endswith((".ttf", ".otf", ".ttc")):
+                            font_candidates.append(os.path.join(d, fname))
+                except Exception:
+                    pass
+            
+            # 3) Linux font discovery via fontconfig (if available)
+            try:
+                import subprocess
+                result = subprocess.run(["fc-list"], capture_output=True, text=True, timeout=1)
+                if result.returncode == 0:
+                    for line in result.stdout.split("\n"):
+                        if fam_lower in line.lower():
+                            font_path = line.split(":")[0] if ":" in line else None
+                            if font_path and os.path.exists(font_path):
+                                font_candidates.insert(0, font_path)
+            except Exception:
+                pass
+
         # Preferred bundled fonts on Linux containers (Render uses these)
         if bold:
             font_candidates.append("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf")
@@ -138,11 +201,6 @@ class HTMLSlideGenerator:
             font_candidates.append("/System/Library/Fonts/Arial Bold.ttf")
         font_candidates.append("/System/Library/Fonts/Helvetica.ttc")
         font_candidates.append("/System/Library/Fonts/Arial.ttf")
-        
-        # PIL bundled fonts (work even when system fonts are missing)
-        if bold:
-            font_candidates.append("DejaVuSans-Bold.ttf")
-        font_candidates.append("DejaVuSans.ttf")
 
         for path in font_candidates:
             try:
@@ -156,6 +214,201 @@ class HTMLSlideGenerator:
         # Final fallback - always works
         print(f"Warning: Could not load custom font, using default font for size {size}")
         return ImageFont.load_default()
+
+    def _make_white_background_transparent(self, img: Image.Image, threshold: int = 245) -> Image.Image:
+        """
+        Convert near-white pixels to transparent.
+        Useful for icon PNGs that ship with a white box background.
+        """
+        try:
+            rgba = img.convert("RGBA")
+            arr = np.array(rgba)
+            rgb = arr[:, :, :3]
+            alpha = arr[:, :, 3]
+            mask_white = (rgb[:, :, 0] >= threshold) & (rgb[:, :, 1] >= threshold) & (rgb[:, :, 2] >= threshold) & (alpha > 0)
+            arr[mask_white, 3] = 0
+            return Image.fromarray(arr, mode="RGBA")
+        except Exception:
+            return img.convert("RGBA")
+
+    def _load_map_pin_icon(self, project_root: str) -> Optional[Image.Image]:
+        """
+        Load a custom map pin icon (PNG) if available.
+
+        Order:
+        1) MAP_PIN_ICON_PATH env var (absolute or relative)
+        2) assets/pin_marker.png in this repo
+        """
+        candidates = []
+        env_path = os.getenv("MAP_PIN_ICON_PATH")
+        if env_path:
+            candidates.append(env_path)
+        candidates.append(os.path.join(project_root, "assets", "pin_marker.png"))
+
+        for path in candidates:
+            try:
+                if not path:
+                    continue
+                resolved = path
+                if not os.path.isabs(resolved):
+                    resolved = os.path.join(project_root, resolved)
+                if not os.path.exists(resolved):
+                    continue
+                icon = Image.open(resolved).convert("RGBA")
+                icon = self._make_white_background_transparent(icon)
+                # Trim transparent margins if any
+                bbox = icon.split()[3].getbbox()
+                if bbox:
+                    icon = icon.crop(bbox)
+                return icon
+            except Exception:
+                continue
+        return None
+
+    def _load_location_label_bg(self, project_root: str) -> Optional[Image.Image]:
+        """
+        Load a custom background image for the map location label.
+
+        Order:
+        1) MAP_LOCATION_LABEL_BG_PATH env var (absolute or relative)
+        2) assets/location_label_bg.png in this repo
+        """
+        candidates = []
+        env_path = os.getenv("MAP_LOCATION_LABEL_BG_PATH")
+        if env_path:
+            candidates.append(env_path)
+        candidates.append(os.path.join(project_root, "assets", "location_label_bg.png"))
+
+        for path in candidates:
+            try:
+                if not path:
+                    continue
+                resolved = path
+                if not os.path.isabs(resolved):
+                    resolved = os.path.join(project_root, resolved)
+                if not os.path.exists(resolved):
+                    continue
+                bg = Image.open(resolved).convert("RGBA")
+                bg = self._make_white_background_transparent(bg)
+                # Trim transparent margins if any
+                bbox = bg.split()[3].getbbox()
+                if bbox:
+                    bg = bg.crop(bbox)
+                return bg
+            except Exception:
+                continue
+        return None
+
+    def _resize_pill_bg(self, bg: Image.Image, target_w: int, target_h: int) -> Image.Image:
+        """
+        Resize a pill-shaped background without squishing the rounded ends.
+
+        Strategy:
+        - Scale background to target height (preserve aspect ratio)
+        - 3-slice horizontally: left cap + stretchable center + right cap
+        """
+        bg = bg.convert("RGBA")
+        target_w = max(1, int(target_w))
+        target_h = max(1, int(target_h))
+
+        # First, scale to target height while preserving aspect ratio.
+        if bg.size[1] != target_h:
+            scale = target_h / float(bg.size[1])
+            scaled_w = max(1, int(bg.size[0] * scale))
+            bg = bg.resize((scaled_w, target_h), Image.Resampling.LANCZOS)
+
+        # Choose a cap width based on height (typical pill geometry).
+        # Clamp so the center slice always has positive width.
+        cap_w = min(max(1, int(bg.size[1] * 0.55)), max(1, (bg.size[0] // 2) - 1))
+
+        # If the requested width is too small, just do a normal resize.
+        if target_w <= cap_w * 2 + 1:
+            return bg.resize((target_w, target_h), Image.Resampling.LANCZOS)
+
+        left = bg.crop((0, 0, cap_w, target_h))
+        right = bg.crop((bg.size[0] - cap_w, 0, bg.size[0], target_h))
+        center = bg.crop((cap_w, 0, bg.size[0] - cap_w, target_h))
+
+        center_w = target_w - (cap_w * 2)
+        center = center.resize((center_w, target_h), Image.Resampling.LANCZOS)
+
+        out = Image.new("RGBA", (target_w, target_h), (0, 0, 0, 0))
+        out.paste(left, (0, 0), left)
+        out.paste(center, (cap_w, 0), center)
+        out.paste(right, (cap_w + center_w, 0), right)
+        return out
+
+    def _dominant_visible_rgb(self, img: Image.Image) -> Optional[tuple]:
+        """
+        Estimate a dominant RGB color from an RGBA image, ignoring transparent pixels,
+        near-white backgrounds, and very dark outline/shadow pixels.
+        """
+        try:
+            rgba = img.convert("RGBA")
+            arr = np.array(rgba)
+            rgb = arr[:, :, :3].astype(np.int16)
+            a = arr[:, :, 3].astype(np.int16)
+
+            # Visible pixels only
+            mask = a > 10
+
+            # Exclude near-white (common icon background)
+            mask &= ~((rgb[:, :, 0] > 245) & (rgb[:, :, 1] > 245) & (rgb[:, :, 2] > 245))
+
+            # Exclude very dark pixels (often outline/shadow)
+            luma = (0.2126 * rgb[:, :, 0] + 0.7152 * rgb[:, :, 1] + 0.0722 * rgb[:, :, 2])
+            mask &= luma > 45
+
+            coords = np.where(mask)
+            if coords[0].size < 50:
+                return None
+
+            pixels = rgb[coords]
+            med = np.median(pixels, axis=0)
+            return (int(med[0]), int(med[1]), int(med[2]))
+        except Exception:
+            return None
+
+    def _tint_rgba_to_color(self, img: Image.Image, target_rgb: tuple) -> Image.Image:
+        """
+        Tint an RGBA image towards a target color while preserving shading.
+        Uses per-channel scaling based on the image's average visible color.
+        """
+        try:
+            rgba = img.convert("RGBA")
+            arr = np.array(rgba).astype(np.float32)
+            rgb = arr[:, :, :3]
+            a = arr[:, :, 3]
+
+            mask = a > 0
+            if mask.sum() == 0:
+                return rgba
+
+            base = rgb[mask].mean(axis=0)
+            base = np.maximum(base, 1.0)
+
+            target = np.array(target_rgb, dtype=np.float32)
+            scale = target / base
+            scale = np.clip(scale, 0.15, 6.0)
+
+            rgb = np.clip(rgb * scale, 0, 255)
+            arr[:, :, :3] = rgb
+            return Image.fromarray(arr.astype(np.uint8), mode="RGBA")
+        except Exception:
+            return img.convert("RGBA")
+
+    def _darken_rgba(self, img: Image.Image, factor: float = 0.88) -> Image.Image:
+        """
+        Darken an RGBA image by multiplying RGB channels (preserves alpha).
+        factor < 1.0 makes it darker.
+        """
+        try:
+            rgba = img.convert("RGBA")
+            arr = np.array(rgba).astype(np.float32)
+            arr[:, :, :3] = np.clip(arr[:, :, :3] * float(factor), 0, 255)
+            return Image.fromarray(arr.astype(np.uint8), mode="RGBA")
+        except Exception:
+            return img.convert("RGBA")
     
     def _pdf_to_image(self, pdf_path: str) -> Image.Image:
         """Convert first page of PDF to PIL Image."""
@@ -1222,9 +1475,18 @@ class HTMLSlideGenerator:
             co_investors_text = '\n'.join([f.strip() for f in co_investors_text.split(',')])
         
         background_text = company_data.get('background', company_data.get('description', ''))
-        location = company_data.get('address', company_data.get('location', 'Los Angeles'))
-        if ',' in location:
-            location = location.split(',')[0].strip()
+        # Extract city name from address - handle formats like "123 Innovation Drive, San Francisco, CA 94105"
+        full_address = company_data.get('address', company_data.get('location', 'Los Angeles'))
+        # Try to extract just the city name
+        if ',' in full_address:
+            parts = [p.strip() for p in full_address.split(',')]
+            # If address has 3+ parts, city is usually the second part (street, city, state/zip)
+            if len(parts) >= 3:
+                location = parts[1]  # e.g., "San Francisco" from "123 Innovation Drive, San Francisco, CA 94105"
+            else:
+                location = parts[0]  # First part if only 2 parts
+        else:
+            location = full_address
         
         investment_stage = company_data.get('investment_stage', '')
         if not investment_stage:
@@ -1250,26 +1512,42 @@ class HTMLSlideGenerator:
         name_color = (255, 140, 0)  # More vibrant orange, similar to slide orange
         
         # Dynamic font sizing based on company name length to prevent overlap with map
-        # Start with base font size
-        base_font_size = 180
+        # Start with base font size (slightly larger)
+        base_font_size = 200
         name_font_size = base_font_size
         
         # Calculate text width with base font to check for overlap
-        test_font = self._load_font(name_font_size, bold=True)
+        # Title font: prefer Bebas Neue if available (bundled or installed), otherwise fall back.
+        test_font = self._load_font(name_font_size, bold=True, preferred_family="BebasNeue")
         text_bbox = draw.textbbox((0, 0), company_name, font=test_font)
         text_width = text_bbox[2] - text_bbox[0]
         
-        # If text would overlap with map (map starts at x=1250), reduce font size
-        max_allowed_width = map_area_x - name_x - 50  # Leave 50px margin before map
-        if text_width > max_allowed_width:
-            # Calculate new font size to fit
-            name_font_size = int((max_allowed_width / text_width) * base_font_size)
-            # Ensure minimum readable size
-            name_font_size = max(100, name_font_size)
-            print(f"   Company name too long ({len(company_name)} chars), reducing font size to {name_font_size}px to avoid map overlap")
+        # If text would overlap with map, reduce font size until it fits.
+        # Keep it as large as possible (less aggressive reduction than before).
+        max_allowed_width = map_area_x - name_x - 80  # Leave 80px margin before map (increased from 50)
+        while text_width > max_allowed_width and name_font_size > 60:
+            # Reduce by 5% each iteration for smoother sizing (keeps text bigger)
+            name_font_size = int(name_font_size * 0.95)
+            test_font = self._load_font(name_font_size, bold=True, preferred_family="BebasNeue")
+            text_bbox = draw.textbbox((0, 0), company_name, font=test_font)
+            text_width = text_bbox[2] - text_bbox[0]
+        
+        # Prefer a larger minimum size, but only if it still fits.
+        desired_min_size = 90
+        if name_font_size < desired_min_size:
+            min_font = self._load_font(desired_min_size, bold=True, preferred_family="BebasNeue")
+            min_bbox = draw.textbbox((0, 0), company_name, font=min_font)
+            min_width = min_bbox[2] - min_bbox[0]
+            if min_width <= max_allowed_width:
+                name_font_size = desired_min_size
+        
+        # Hard floor so it never becomes unreadably tiny
+        name_font_size = max(70, name_font_size)
+        if name_font_size < base_font_size:
+            print(f"   Company name too long ({len(company_name)} chars), reduced font size to {name_font_size}px to avoid map overlap")
         
         # Use very thick, bold font (matching the image style - extra thick and bold)
-        name_font = self._load_font(name_font_size, bold=True)
+        name_font = self._load_font(name_font_size, bold=True, preferred_family="BebasNeue")
         
         # Draw company name with stroke (outline) to make it appear thicker
         # First draw the stroke (outline) in the same color but slightly darker
@@ -1348,86 +1626,107 @@ class HTMLSlideGenerator:
             
             print(f"   PIN: ({pin_x}, {pin_y})")
             
-            # Draw the pin (yellow location pin icon - teardrop shape with circular hole)
-            yellow = (255, 215, 0)
-            black = (0, 0, 0)
-            
-            # Pin dimensions - larger for visibility
-            pin_width = 40  # Width of the rounded top
-            pin_height = 50  # Total height including point
-            point_length = 12  # Length of the pointed bottom
-            hole_radius = 6  # Radius of the circular hole
-            
-            # Create a temporary image for the pin to draw the teardrop shape
-            pin_img_size = max(pin_width, pin_height + point_length) + 20
-            pin_img = Image.new('RGBA', (pin_img_size, pin_img_size), (0, 0, 0, 0))
-            pin_draw = ImageDraw.Draw(pin_img)
-            
-            # Calculate center position in the pin image
-            center_x = pin_img_size // 2
-            center_y = pin_img_size // 2
-            
-            # Draw shadow first (slightly offset and darker) for depth
-            shadow_offset = 3
-            shadow_center_x = center_x + shadow_offset
-            shadow_center_y = center_y + shadow_offset
-            
-            # Shadow: rounded top (ellipse) + pointed bottom (triangle)
-            # Top ellipse for shadow
-            shadow_top_y = shadow_center_y - pin_height // 2
-            pin_draw.ellipse(
-                [(shadow_center_x - pin_width // 2, shadow_top_y - pin_width // 4),
-                 (shadow_center_x + pin_width // 2, shadow_top_y + pin_width // 4)],
-                fill=(50, 50, 50, 120)
-            )
-            # Bottom triangle for shadow
-            shadow_points = [
-                (shadow_center_x - pin_width // 2, shadow_top_y + pin_width // 4),
-                (shadow_center_x + pin_width // 2, shadow_top_y + pin_width // 4),
-                (shadow_center_x, shadow_center_y + point_length + shadow_offset),
-            ]
-            pin_draw.polygon(shadow_points, fill=(50, 50, 50, 120))
-            
-            # Draw main teardrop shape (yellow)
-            # Top: rounded ellipse (the rounded part of the teardrop)
-            top_y = center_y - pin_height // 2
-            pin_draw.ellipse(
-                [(center_x - pin_width // 2, top_y - pin_width // 4),
-                 (center_x + pin_width // 2, top_y + pin_width // 4)],
-                fill=yellow, outline=black, width=2
-            )
-            
-            # Bottom: triangle connecting to point (the pointed part)
-            teardrop_points = [
-                (center_x - pin_width // 2, top_y + pin_width // 4),  # Left bottom of ellipse
-                (center_x + pin_width // 2, top_y + pin_width // 4),  # Right bottom of ellipse
-                (center_x, center_y + point_length),  # Point at bottom
-            ]
-            pin_draw.polygon(teardrop_points, fill=yellow, outline=black, width=2)
-            
-            # Draw circular hole in the center (dark circle for depth)
-            hole_center_x = center_x
-            hole_center_y = top_y  # Position hole at top center
-            pin_draw.ellipse(
-                [(hole_center_x - hole_radius, hole_center_y - hole_radius),
-                 (hole_center_x + hole_radius, hole_center_y + hole_radius)],
-                fill=black
-            )
-            
-            # Add inner highlight ring for 3D effect (lighter inner ring)
-            pin_draw.ellipse(
-                [(hole_center_x - hole_radius + 2, hole_center_y - hole_radius + 2),
-                 (hole_center_x + hole_radius - 2, hole_center_y + hole_radius - 2)],
-                fill=(100, 100, 100)
-            )
-            
-            # Paste the pin onto the main slide so the bottom tip lands on (pin_x, pin_y)
-            paste_pin_x = pin_x - pin_img_size // 2
-            paste_pin_y = pin_y - pin_img_size // 2
-            # Move image up so the bottom tip hits (pin_x, pin_y) instead of centering
-            paste_pin_y -= int(pin_img_size * 0.20)  # Adjust 0.18-0.25 if needed
-            slide.paste(pin_img, (paste_pin_x, paste_pin_y), pin_img)
-            draw = ImageDraw.Draw(slide)
+            # Resolve project root once (used for custom pin + label assets)
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            project_root = os.path.dirname(script_dir) if os.path.basename(script_dir) == "src" else script_dir
+
+            # Use a custom marker icon if available (recommended).
+            pin_icon = self._load_map_pin_icon(project_root)
+            marker_rgb = None
+
+            if pin_icon:
+                marker_rgb = self._dominant_visible_rgb(pin_icon)
+                # Resize while preserving aspect ratio (anchor bottom-center on pin_x/pin_y).
+                target_h = 64
+                scale = target_h / float(pin_icon.size[1])
+                target_w = max(1, int(pin_icon.size[0] * scale))
+                pin_icon = pin_icon.resize((target_w, target_h), Image.Resampling.LANCZOS)
+                w, h = pin_icon.size
+                paste_pin_x = int(pin_x - w / 2)
+                paste_pin_y = int(pin_y - h)
+                slide.paste(pin_icon, (paste_pin_x, paste_pin_y), pin_icon)
+                draw = ImageDraw.Draw(slide)
+            else:
+                # Fallback: draw the pin (yellow location pin icon - teardrop shape with circular hole)
+                yellow = (255, 215, 0)
+                black = (0, 0, 0)
+                
+                # Pin dimensions - larger for visibility
+                pin_width = 40  # Width of the rounded top
+                pin_height = 50  # Total height including point
+                point_length = 12  # Length of the pointed bottom
+                hole_radius = 6  # Radius of the circular hole
+                
+                # Create a temporary image for the pin to draw the teardrop shape
+                pin_img_size = max(pin_width, pin_height + point_length) + 20
+                pin_img = Image.new('RGBA', (pin_img_size, pin_img_size), (0, 0, 0, 0))
+                pin_draw = ImageDraw.Draw(pin_img)
+                
+                # Calculate center position in the pin image
+                center_x = pin_img_size // 2
+                center_y = pin_img_size // 2
+                
+                # Draw shadow first (slightly offset and darker) for depth
+                shadow_offset = 3
+                shadow_center_x = center_x + shadow_offset
+                shadow_center_y = center_y + shadow_offset
+                
+                # Shadow: rounded top (ellipse) + pointed bottom (triangle)
+                # Top ellipse for shadow
+                shadow_top_y = shadow_center_y - pin_height // 2
+                pin_draw.ellipse(
+                    [(shadow_center_x - pin_width // 2, shadow_top_y - pin_width // 4),
+                     (shadow_center_x + pin_width // 2, shadow_top_y + pin_width // 4)],
+                    fill=(50, 50, 50, 120)
+                )
+                # Bottom triangle for shadow
+                shadow_points = [
+                    (shadow_center_x - pin_width // 2, shadow_top_y + pin_width // 4),
+                    (shadow_center_x + pin_width // 2, shadow_top_y + pin_width // 4),
+                    (shadow_center_x, shadow_center_y + point_length + shadow_offset),
+                ]
+                pin_draw.polygon(shadow_points, fill=(50, 50, 50, 120))
+                
+                # Draw main teardrop shape (yellow)
+                # Top: rounded ellipse (the rounded part of the teardrop)
+                top_y = center_y - pin_height // 2
+                pin_draw.ellipse(
+                    [(center_x - pin_width // 2, top_y - pin_width // 4),
+                     (center_x + pin_width // 2, top_y + pin_width // 4)],
+                    fill=yellow, outline=black, width=2
+                )
+                
+                # Bottom: triangle connecting to point (the pointed part)
+                teardrop_points = [
+                    (center_x - pin_width // 2, top_y + pin_width // 4),  # Left bottom of ellipse
+                    (center_x + pin_width // 2, top_y + pin_width // 4),  # Right bottom of ellipse
+                    (center_x, center_y + point_length),  # Point at bottom
+                ]
+                pin_draw.polygon(teardrop_points, fill=yellow, outline=black, width=2)
+                
+                # Draw circular hole in the center (dark circle for depth)
+                hole_center_x = center_x
+                hole_center_y = top_y  # Position hole at top center
+                pin_draw.ellipse(
+                    [(hole_center_x - hole_radius, hole_center_y - hole_radius),
+                     (hole_center_x + hole_radius, hole_center_y + hole_radius)],
+                    fill=black
+                )
+                
+                # Add inner highlight ring for 3D effect (lighter inner ring)
+                pin_draw.ellipse(
+                    [(hole_center_x - hole_radius + 2, hole_center_y - hole_radius + 2),
+                     (hole_center_x + hole_radius - 2, hole_center_y + hole_radius - 2)],
+                    fill=(100, 100, 100)
+                )
+                
+                # Paste the pin onto the main slide so the bottom tip lands on (pin_x, pin_y)
+                paste_pin_x = pin_x - pin_img_size // 2
+                paste_pin_y = pin_y - pin_img_size // 2
+                # Move image up so the bottom tip hits (pin_x, pin_y) instead of centering
+                paste_pin_y -= int(pin_img_size * 0.20)  # Adjust 0.18-0.25 if needed
+                slide.paste(pin_img, (paste_pin_x, paste_pin_y), pin_img)
+                draw = ImageDraw.Draw(slide)
             
             # Place the city name label with yellow block (similar to other yellow blocks)
             yellow = (255, 215, 0)  # Yellow for the block
@@ -1458,8 +1757,21 @@ class HTMLSlideGenerator:
             if box_y + box_height > map_area_y + map_height:
                 box_y = pin_y - box_height - 20  # Move up if it would go outside
             
-            # Draw yellow box (similar to other section labels)
-            draw.rectangle([(box_x, box_y), (box_x + box_width, box_y + box_height)], fill=yellow)
+            # Draw label background. Prefer custom rounded background image if available.
+            label_bg = self._load_location_label_bg(project_root)
+            if label_bg:
+                bg_resized = self._resize_pill_bg(label_bg, int(box_width), int(box_height))
+                # Tint label background to match marker color (when available)
+                if marker_rgb:
+                    bg_resized = self._tint_rgba_to_color(bg_resized, marker_rgb)
+                # Make the block slightly darker for a more natural look
+                bg_resized = self._darken_rgba(bg_resized, factor=0.88)
+                slide.paste(bg_resized, (int(box_x), int(box_y)), bg_resized)
+                draw = ImageDraw.Draw(slide)
+            else:
+                # Fallback: plain rectangle
+                darker_yellow = (235, 195, 0)
+                draw.rectangle([(box_x, box_y), (box_x + box_width, box_y + box_height)], fill=darker_yellow)
             
             # Draw location text in the yellow box (centered with padding)
             text_x = box_x + box_padding_x
@@ -1931,17 +2243,21 @@ class HTMLSlideGenerator:
         # When rotated -90 degrees, the top becomes the right side
         # Position text at top so after rotation it's properly positioned
         # Center text horizontally before rotation
-        text_x = stage_img_width // 2 - text_width // 2
+        text_x = (stage_img_width // 2 - text_width // 2) 
         text_y = padding  # Position at top edge - becomes right edge after rotation
         
-        # Draw stroke by drawing text multiple times with slight offsets (thicker effect)
-        for adj in range(-3, 4):  # slightly less bold
-            for adj2 in range(-3, 4):
-                if adj != 0 or adj2 != 0:
-                    stage_draw.text((text_x + adj, text_y + adj2), stage_text, fill=stroke_color, font=sidebar_bold_font)
-        
-        # Then draw the main text on top
-        stage_draw.text((text_x, text_y), stage_text, fill=stage_color, font=sidebar_bold_font)
+        # Draw text without heavy stroke (cleaner, less bold appearance)
+        # Just draw the main text - no stroke effect
+        stage_draw.text(
+            (text_x, text_y),
+            stage_text,
+            fill=(0, 0, 0),              # pure black
+            font=sidebar_bold_font,
+            # Pillow/FreeType expects an integer stroke width (floats can crash on some versions).
+            stroke_width=2,               # key: thickness (2–4 works well)
+            stroke_fill=(0, 0, 0),       # same color = heavier weight
+        )
+
         
         # Rotate so text reads bottom -> top (same as SLAUSON&CO)
         stage_img = stage_img.rotate(90, expand=True)
@@ -1967,14 +2283,41 @@ class HTMLSlideGenerator:
             final_w, final_h = stage_img.size
         
         # Compute placement
-        paste_x = 12              # align with SLAUSON&CO left
-        paste_y = top_margin + 25 # lower it
+        paste_x = 50            # nudge stage label slightly right
+        paste_y = top_margin + 30 # lower it
         
         # Clamp so it can NEVER go off-canvas
-        paste_x = max(0, min(paste_x, sidebar_w - final_w))
+        paste_x = max(0, min(paste_x, (sidebar_w - final_w - 5)))
         paste_y = max(0, min(paste_y, height - final_h))
         
         slide.paste(stage_img, (paste_x, paste_y), stage_img)
+
+        # --- Per-slide tracking watermark (visible, for human traceability) ---
+        # Note: The PDF output from this generator is image-based, so this watermark is not machine-extractable
+        # via PDF text extraction. We use a separate index store for reliable replacement/deletion.
+        slide_job_id = (
+            company_data.get("slide_job_id")
+            or company_data.get("Slide Job ID")
+            or company_data.get("job_id")
+        )
+        if slide_job_id:
+            try:
+                watermark_draw = ImageDraw.Draw(slide)
+                wm_font = self._load_font(14, bold=False)
+                wm_text = f"Slide Job ID: {slide_job_id}"
+                # Bottom-right placement (very right)
+                wm_bbox = watermark_draw.textbbox((0, 0), wm_text, font=wm_font)
+                wm_w = wm_bbox[2] - wm_bbox[0]
+                wm_h = wm_bbox[3] - wm_bbox[1]
+                margin = 10
+                wm_x = max(margin, width - wm_w - margin)
+                wm_y = max(margin, height - wm_h - margin)
+
+                # Pure solid black
+                wm_fill = (0, 0, 0, 255) if slide.mode == "RGBA" else (0, 0, 0)
+                watermark_draw.text((wm_x, wm_y), wm_text, fill=wm_fill, font=wm_font)
+            except Exception:
+                pass
         
         # Convert to RGB for PDF
         slide_rgb = Image.new('RGB', slide.size, (42, 42, 42))
@@ -2159,7 +2502,7 @@ class HTMLSlideGenerator:
             name_y_px = 120
             
             # Calculate font size (same logic as PIL)
-            base_font_size = 180
+            base_font_size = 200
             name_font_size = base_font_size
             # Check for overlap with map
             max_allowed_width = map_area_x - name_x_px - 50
@@ -2167,7 +2510,13 @@ class HTMLSlideGenerator:
             estimated_width = len(company_name) * (name_font_size * 0.6)  # Rough estimate
             if estimated_width > max_allowed_width:
                 name_font_size = int((max_allowed_width / estimated_width) * base_font_size)
-                name_font_size = max(100, name_font_size)
+                # Prefer a larger minimum, but only if it still fits by estimate.
+                desired_min_size = 120
+                if name_font_size < desired_min_size:
+                    desired_estimated_width = len(company_name) * (desired_min_size * 0.6)
+                    if desired_estimated_width <= max_allowed_width:
+                        name_font_size = desired_min_size
+                name_font_size = max(90, name_font_size)
             
             textbox = slide_pptx.shapes.add_textbox(
                 Inches(name_x_px * px_to_inch),

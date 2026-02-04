@@ -25,11 +25,29 @@ This document lists all environment variables needed for the Slauson automation 
 - `CANVA_CLIENT_SECRET` - Canva OAuth Client Secret
 - `CANVA_TEMPLATE_ID` - Canva template design ID (if using Canva templates)
 - `CANVA_STATIC_DESIGN_ID` - (Optional) Design ID to append slides to (for reference/logging)
+- `CANVA_REDIRECT_URI` - OAuth redirect URI registered in your Canva app (recommended to point to your server callback, e.g. `https://your-app.com/oauth/canva/callback`)
+- `FLASK_SECRET_KEY` - Secret used to sign the OAuth PKCE session cookie (required for stable sessions in production)
 
 **Note:** Canva OAuth tokens are stored in `canva_tokens.json` locally, or can be set via:
 - `CANVA_REFRESH_TOKEN` - (For Render) Refresh token for auto-refresh
 - `CANVA_ACCESS_TOKEN` - (For Render) Access token
 - `CANVA_TOKEN_REFRESHED_AT` - (For Render) Timestamp of last refresh
+
+**Recommended for "no manual token updates": Google Drive token store**
+
+If your server already has Google Drive OAuth configured, it can persist Canva tokens in a private JSON file on Drive so refresh survives restarts without updating env vars:
+
+- `CANVA_TOKEN_STORE_DRIVE_FILE_ID` - (Optional) File ID of the token JSON in Drive (fastest, no search)
+- `CANVA_TOKEN_STORE_DRIVE_FILE_NAME` - (Optional, default `canva_tokens.json`) File name to search/create in Drive
+- `CANVA_TOKEN_STORE_DRIVE_FOLDER_ID` - (Optional) Folder ID to store the token file (defaults to `GOOGLE_DRIVE_FOLDER_ID` if set)
+
+### Per-slide tracking (Google Drive master PDF)
+
+If you want to reliably replace/delete the correct slide when a Notion entry is edited, the app maintains a Drive-backed index:
+
+- `SLIDE_JOB_INDEX_DRIVE_FILE_ID` - (Optional) File ID of `slide_job_index.json` in Drive
+- `SLIDE_JOB_INDEX_DRIVE_FILE_NAME` - (Optional, default `slide_job_index.json`) File name to search/create in Drive
+- `SLIDE_JOB_INDEX_DRIVE_FOLDER_ID` - (Optional) Folder to store the index JSON (defaults to `GOOGLE_DRIVE_FOLDER_ID`)
 
 ### Background Removal APIs (Optional)
 - `REMOVEBG_API_KEY` - remove.bg API key (for background removal)

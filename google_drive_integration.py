@@ -175,6 +175,66 @@ class GoogleDriveIntegration:
         except HttpError as error:
             raise Exception(f"Google Drive upload error: {error}")
 
+    def upload_bytes(
+        self,
+        content_bytes: bytes,
+        filename: str,
+        mime_type: str,
+        folder_id: Optional[str] = None,
+        make_public_read: bool = False,
+    ) -> str:
+        """
+        Upload arbitrary bytes to Google Drive and return the file ID.
+
+        Notes:
+        - By default, this does NOT change sharing permissions (suitable for secrets like tokens).
+        - If you need a shareable link, use upload_pdf() or set make_public_read=True.
+        """
+        if not self.service:
+            raise ValueError("Google Drive service not initialized")
+
+        try:
+            file_metadata = {"name": filename}
+            if folder_id:
+                file_metadata["parents"] = [folder_id]
+
+            media = MediaIoBaseUpload(io.BytesIO(content_bytes), mimetype=mime_type, resumable=True)
+            file = self.service.files().create(
+                body=file_metadata,
+                media_body=media,
+                fields="id, webViewLink, webContentLink",
+                supportsAllDrives=True,
+            ).execute()
+            file_id = file.get("id")
+
+            if make_public_read and file_id:
+                self.service.permissions().create(
+                    fileId=file_id,
+                    body={"role": "reader", "type": "anyone"},
+                    supportsAllDrives=True,
+                ).execute()
+
+            return file_id
+        except HttpError as error:
+            raise Exception(f"Google Drive upload error: {error}")
+
+    def overwrite_file_bytes(self, file_id: str, content_bytes: bytes, mime_type: str) -> None:
+        """
+        Overwrite an existing file by file ID (no permission changes).
+        """
+        if not self.service:
+            raise ValueError("Google Drive service not initialized")
+        try:
+            media = MediaIoBaseUpload(io.BytesIO(content_bytes), mimetype=mime_type, resumable=True)
+            self.service.files().update(
+                fileId=file_id,
+                media_body=media,
+                fields="id",
+                supportsAllDrives=True,
+            ).execute()
+        except HttpError as error:
+            raise Exception(f"Google Drive overwrite error: {error}")
+
     def download_file(self, file_id: str) -> bytes:
         """
         Download a file from Google Drive by file ID and return bytes.
@@ -219,7 +279,12 @@ class GoogleDriveIntegration:
         except HttpError as error:
             raise Exception(f"Google Drive overwrite error: {error}")
 
-    def find_file_id_by_name(self, filename: str, parent_folder_id: Optional[str] = None) -> Optional[str]:
+    def find_file_id_by_name(
+        self,
+        filename: str,
+        parent_folder_id: Optional[str] = None,
+        mime_type: str = "application/pdf",
+    ) -> Optional[str]:
         """
         Find the first file ID matching a given name (optionally within a folder).
         If not found in the folder, falls back to global search.
@@ -241,7 +306,7 @@ class GoogleDriveIntegration:
             return files[0]["id"] if files else None
 
         # First, try within the parent (if provided)
-        query_parts = [f"name = '{filename}'", "mimeType = 'application/pdf'"]
+        query_parts = [f"name = '{filename}'", f"mimeType = '{mime_type}'"]
         if parent_folder_id:
             query_parts.append(f"'{parent_folder_id}' in parents")
         query = " and ".join(query_parts)
@@ -254,7 +319,7 @@ class GoogleDriveIntegration:
 
         # Fallback: global search by name
         try:
-            global_query = f"name = '{filename}' and mimeType = 'application/pdf'"
+            global_query = f"name = '{filename}' and mimeType = '{mime_type}'"
             file_id = _search(global_query)
             if file_id:
                 print(f"   Found '{filename}' via global search (outside folder).")
