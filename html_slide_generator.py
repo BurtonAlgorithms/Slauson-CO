@@ -1634,6 +1634,18 @@ class HTMLSlideGenerator:
         # Compute Y from font bbox so the visual top stays consistent across font sizes.
         try:
             final_bbox = draw.textbbox((0, 0), company_name, font=name_font)
+            final_text_width = final_bbox[2] - final_bbox[0]
+
+            # If the title did NOT need shrinking to avoid the map, nudge it right a bit so the
+            # slide feels less left-heavy (e.g., "Veridyna"). Never let it overlap the map.
+            if name_font_size >= base_font_size:
+                right_limit_x = map_area_x - 90 - final_text_width  # keep same map margin
+                available_shift = right_limit_x - name_x
+                if available_shift > 0:
+                    # Move a fraction of available gap, capped, with a small minimum threshold.
+                    desired_shift = min(60, int(available_shift * 0.35))
+                    if desired_shift >= 12:
+                        name_x = int(name_x + desired_shift)
             name_y = int(desired_title_top - final_bbox[1])
         except Exception:
             name_y = 110
