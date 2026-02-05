@@ -108,6 +108,13 @@ class HTMLSlideGenerator:
         Load a font with robust fallbacks that work on Render.
         Tries common system fonts, then DejaVu (available in most containers), then default.
         """
+        def _looks_italic(font_path: str) -> bool:
+            try:
+                base = os.path.basename(font_path).lower()
+            except Exception:
+                base = str(font_path).lower()
+            return ("italic" in base) or ("oblique" in base) or ("slanted" in base)
+
         font_candidates = []
         
         # Optional: try a preferred font family first (e.g., "Trouble")
@@ -121,6 +128,7 @@ class HTMLSlideGenerator:
             # 1) Project-bundled fonts (recommended for consistency)
             script_dir = os.path.dirname(os.path.abspath(__file__))
             bundled_dirs = [
+                os.path.join(script_dir, "assets"),
                 os.path.join(script_dir, "assets", "fonts"),
                 os.path.join(script_dir, "assets", "font"),
                 os.path.join(script_dir, "fonts"),
@@ -154,7 +162,10 @@ class HTMLSlideGenerator:
                     if not os.path.isdir(d):
                         continue
                     for fname in os.listdir(d):
-                        if fam_lower in fname.lower() and fname.lower().endswith((".ttf", ".otf", ".ttc")):
+                        fname_lower = fname.lower()
+                        if fam_lower in fname_lower and fname_lower.endswith((".ttf", ".otf", ".ttc")):
+                            if "italic" in fname_lower or "oblique" in fname_lower or "slanted" in fname_lower:
+                                continue
                             font_candidates.append(os.path.join(d, fname))
                 except Exception:
                     pass
@@ -168,6 +179,8 @@ class HTMLSlideGenerator:
                         if fam_lower in line.lower():
                             font_path = line.split(":")[0] if ":" in line else None
                             if font_path and os.path.exists(font_path):
+                                if _looks_italic(font_path):
+                                    continue
                                 font_candidates.insert(0, font_path)
             except Exception:
                 pass
@@ -188,6 +201,8 @@ class HTMLSlideGenerator:
                     if 'DejaVu' in line or 'Liberation' in line:
                         font_path = line.split(':')[0] if ':' in line else None
                         if font_path and os.path.exists(font_path):
+                            if _looks_italic(font_path):
+                                continue
                             if bold and 'Bold' in font_path:
                                 font_candidates.insert(0, font_path)
                             elif not bold and 'Bold' not in font_path:
@@ -206,6 +221,8 @@ class HTMLSlideGenerator:
             try:
                 if os.path.exists(path) or not os.path.isabs(path):
                     # Only check existence for absolute paths
+                    if _looks_italic(path):
+                        continue
                     font = ImageFont.truetype(path, size)
                     if os.getenv("DEBUG_FONTS", "").strip() in ("1", "true", "yes", "y", "on"):
                         print(f"✓ Loaded font: {path} (size={size}, bold={bold})")
@@ -1528,56 +1545,77 @@ class HTMLSlideGenerator:
         # Do this once and reuse for both company name overlap detection and map pin placement
         map_area_x, map_area_y, map_width, map_height = self._detect_orange_us_bbox(template)
         
-        # Company name position: aligned with founders but moved a bit to the left, significantly raised
-        name_x = founders_text_x - 50  # Moved a bit to the left from founders position
-        name_y = 120  # Lowered from 80 to move closer to content
+        # Company name position: left aligned with founders, with a consistent top margin.
+        name_x = founders_text_x - 60  # Slightly more left breathing room
+        desired_title_top = 95  # Keep title visually aligned regardless of font size (smaller = lower baseline)
         
         # Use orange color similar to the rest of the slide (lighter, more vibrant orange)
         name_color = (255, 140, 0)  # More vibrant orange, similar to slide orange
         
-        # Dynamic font sizing based on company name length to prevent overlap with map
-        # Start with base font size (slightly larger)
-        base_font_size = 200
+        # Dynamic font sizing:
+        # - Try a larger default for short names (e.g., ASTRANIS) so it feels premium.
+        # - If it would overlap with the map region, shrink until it fits (existing behavior).
+        name_len = len(company_name.strip())
+        if name_len <= 10:
+            base_font_size = 260
+        elif name_len <= 14:
+            base_font_size = 235
+        else:
+            base_font_size = 200
         name_font_size = base_font_size
         
         # Calculate text width with base font to check for overlap
         # Title font: prefer Bebas Neue if available (bundled or installed), otherwise fall back.
-        test_font = self._load_font(name_font_size, bold=True, preferred_family="BebasNeue")
+        # Use BebasNeue-Regular.ttf (non-italic, regular face) when available.
+        test_font = self._load_font(name_font_size, bold=False, preferred_family="BebasNeue")
         text_bbox = draw.textbbox((0, 0), company_name, font=test_font)
         text_width = text_bbox[2] - text_bbox[0]
         
         # If text would overlap with map, reduce font size until it fits.
         # Keep it as large as possible (less aggressive reduction than before).
-        max_allowed_width = map_area_x - name_x - 80  # Leave 80px margin before map (increased from 50)
+        max_allowed_width = map_area_x - name_x - 90  # Leave margin before map
         while text_width > max_allowed_width and name_font_size > 60:
             # Reduce by 5% each iteration for smoother sizing (keeps text bigger)
             name_font_size = int(name_font_size * 0.95)
-            test_font = self._load_font(name_font_size, bold=True, preferred_family="BebasNeue")
+            test_font = self._load_font(name_font_size, bold=False, preferred_family="BebasNeue")
             text_bbox = draw.textbbox((0, 0), company_name, font=test_font)
             text_width = text_bbox[2] - text_bbox[0]
         
         # Prefer a larger minimum size, but only if it still fits.
-        desired_min_size = 90
+        desired_min_size = 100
         if name_font_size < desired_min_size:
-            min_font = self._load_font(desired_min_size, bold=True, preferred_family="BebasNeue")
+            min_font = self._load_font(desired_min_size, bold=False, preferred_family="BebasNeue")
             min_bbox = draw.textbbox((0, 0), company_name, font=min_font)
             min_width = min_bbox[2] - min_bbox[0]
             if min_width <= max_allowed_width:
                 name_font_size = desired_min_size
         
         # Hard floor so it never becomes unreadably tiny
-        name_font_size = max(70, name_font_size)
+        name_font_size = max(80, name_font_size)
         if name_font_size < base_font_size:
             print(f"   Company name too long ({len(company_name)} chars), reduced font size to {name_font_size}px to avoid map overlap")
         
         # Use very thick, bold font (matching the image style - extra thick and bold)
-        name_font = self._load_font(name_font_size, bold=True, preferred_family="BebasNeue")
+        name_font = self._load_font(name_font_size, bold=False, preferred_family="BebasNeue")
+
+        # Compute Y from font bbox so the visual top stays consistent across font sizes.
+        try:
+            final_bbox = draw.textbbox((0, 0), company_name, font=name_font)
+            name_y = int(desired_title_top - final_bbox[1])
+        except Exception:
+            name_y = 110
+
+        if os.getenv("DEBUG_LAYOUT", "").strip() in ("1", "true", "yes", "y", "on"):
+            print(
+                f"DEBUG_LAYOUT title: '{company_name}' size={name_font_size} "
+                f"pos=({name_x},{name_y}) maxW={max_allowed_width} textW={text_width}"
+            )
         
         # Draw company name with stroke (outline) to make it appear thicker
         # First draw the stroke (outline) in the same color but slightly darker
         stroke_color = (200, 80, 30)  # Slightly darker orange for stroke
         # Draw stroke by drawing text multiple times with slight offsets
-        stroke_width = 2 if name_font_size > 150 else 1  # Adjust stroke based on font size
+        stroke_width = 3 if name_font_size >= 240 else (2 if name_font_size > 150 else 1)
         for adj in range(-stroke_width, stroke_width + 1):
             for adj2 in range(-stroke_width, stroke_width + 1):
                 if adj != 0 or adj2 != 0:
