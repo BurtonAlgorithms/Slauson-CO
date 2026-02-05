@@ -1168,9 +1168,19 @@ def handle_onboarding():
                 canva_master_design_id = None
                 canva_master_design_url = None
                 if master_pdf_bytes_for_canva:
+                    # Add a timestamp to the Canva import filename so it's obvious which design is newest.
+                    # (Drive stays on a stable filename like "Portfolio Slides.pdf" for DocSend sync.)
+                    canva_filename_base = os.getenv("CANVA_MASTER_PDF_FILENAME") or static_file_name or "Portfolio Slides.pdf"
+                    # Human-readable, filesystem-safe UTC timestamp (no ":" characters).
+                    # Example: "2026-02-05 11-34-56 UTC"
+                    ts = time.strftime("%Y-%m-%d %H-%M-%S UTC", time.gmtime())
+                    if canva_filename_base.lower().endswith(".pdf"):
+                        canva_filename = f"{canva_filename_base[:-4]} {ts}.pdf"
+                    else:
+                        canva_filename = f"{canva_filename_base} {ts}.pdf"
                     canva_master = _sync_master_pdf_to_canva(
                         master_pdf_bytes_for_canva,
-                        filename=os.getenv("CANVA_MASTER_PDF_FILENAME") or static_file_name or "Portfolio Slides.pdf",
+                        filename=canva_filename,
                     )
                     if canva_master and canva_master.get("status") == "success":
                         canva_master_design_id = canva_master.get("design_id")

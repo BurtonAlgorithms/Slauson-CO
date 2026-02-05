@@ -1,10 +1,11 @@
 {
   "company_data": {
-    "name": "Veridyna",
+    "name": "Apple",
     "website": "https://techflow.io",
     "description": "AI-powered workflow automation platform helping teams streamline operations and increase productivity through intelligent process optimization.",
     "address": "123 Innovation Drive, San Francisco, CA 94105",
     "investment_date": "2024-11-15",
+    "founders": ["John Doe"],
     "co_investors": "Sequoia Capital, Andreessen Horowitz, Y Combinator",
     "num_employees": 45,
     "first_time_founder": false,

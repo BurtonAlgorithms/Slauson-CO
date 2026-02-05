@@ -1526,10 +1526,11 @@ class HTMLSlideGenerator:
         draw = ImageDraw.Draw(slide)
         width, height = slide.size
         
-        # Load fonts (robust fallbacks for Render)
+        # Load fonts (robust fallbacks for Render/Railway)
         name_font = self._load_font(140, bold=True)
-        body_font = self._load_font(28)
-        small_font = self._load_font(20)
+        # Body text under Founders / Co-Investors / Background: Inter 28pt Regular
+        body_font = self._load_font(28, bold=False, preferred_family="Inter_28pt-Regular")
+        small_font = self._load_font(20, bold=False, preferred_family="Inter_28pt-Regular")
         sidebar_font = self._load_font(28)
         
         # Extract company data
@@ -1549,16 +1550,24 @@ class HTMLSlideGenerator:
             co_investors_text = '\n'.join([f.strip() for f in co_investors_text.split(',')])
         
         background_text = company_data.get('background', company_data.get('description', ''))
-        # Extract city name from address - handle formats like "123 Innovation Drive, San Francisco, CA 94105"
+        # Extract city + state from address - handle formats like
+        # "123 Innovation Drive, San Francisco, CA 94105" -> "San Francisco, CA"
         full_address = company_data.get('address', company_data.get('location', 'Los Angeles'))
-        # Try to extract just the city name
+        # Try to extract city + state (or fall back to whatever we were given)
         if ',' in full_address:
             parts = [p.strip() for p in full_address.split(',')]
             # If address has 3+ parts, city is usually the second part (street, city, state/zip)
             if len(parts) >= 3:
-                location = parts[1]  # e.g., "San Francisco" from "123 Innovation Drive, San Francisco, CA 94105"
+                city = parts[1]  # e.g., "San Francisco"
+                # parts[2] is typically "CA 94105" (or "CA"). Keep only the state token.
+                state_token = (parts[2].split() or [""])[0].strip()
+                if state_token:
+                    location = f"{city}, {state_token}"
+                else:
+                    location = city
             else:
-                location = parts[0]  # First part if only 2 parts
+                # If we only have 2 parts (e.g., "San Francisco, CA"), keep both.
+                location = ", ".join([p for p in parts[:2] if p])
         else:
             location = full_address
         
@@ -1582,19 +1591,20 @@ class HTMLSlideGenerator:
         name_x = founders_text_x - 60  # Slightly more left breathing room
         desired_title_top = 95  # Keep title visually aligned regardless of font size (smaller = lower baseline)
         
-        # Use orange color similar to the rest of the slide (lighter, more vibrant orange)
-        name_color = (255, 140, 0)  # More vibrant orange, similar to slide orange
+        # Use orange color for title
+        # Requested: #FF9100
+        name_color = (255, 145, 0)
         
         # Dynamic font sizing:
         # - Try a larger default for short names (e.g., ASTRANIS) so it feels premium.
         # - If it would overlap with the map region, shrink until it fits (existing behavior).
         name_len = len(company_name.strip())
         if name_len <= 10:
-            base_font_size = 260
+            base_font_size = 230
         elif name_len <= 14:
-            base_font_size = 235
+            base_font_size = 220
         else:
-            base_font_size = 200
+            base_font_size = 185
         name_font_size = base_font_size
         
         # Calculate text width with base font to check for overlap
@@ -1656,15 +1666,18 @@ class HTMLSlideGenerator:
                 f"pos=({name_x},{name_y}) maxW={max_allowed_width} textW={text_width}"
             )
         
-        # Draw company name with stroke (outline) to make it appear thicker
-        # First draw the stroke (outline) in the same color but slightly darker
-        stroke_color = (200, 80, 30)  # Slightly darker orange for stroke
-        # Draw stroke by drawing text multiple times with slight offsets
-        stroke_width = 3 if name_font_size >= 240 else (2 if name_font_size > 150 else 1)
-        for adj in range(-stroke_width, stroke_width + 1):
-            for adj2 in range(-stroke_width, stroke_width + 1):
-                if adj != 0 or adj2 != 0:
-                    draw.text((name_x + adj, name_y + adj2), company_name, fill=stroke_color, font=name_font)
+        # Draw company name with a very subtle stroke (outline) for contrast.
+        # Keep it thin + minimal passes so it doesn't look "bold".
+        stroke_width = 1
+        # Use alpha for a softer outline (works on RGBA slides).
+        stroke_color = (200, 80, 30, 95)
+        # Minimal passes to keep it very subtle.
+        offsets = [
+            (-stroke_width, 0),
+            (stroke_width, 0),
+        ]
+        for dx, dy in offsets:
+            draw.text((name_x + dx, name_y + dy), company_name, fill=stroke_color, font=name_font)
         
         # Then draw the main text on top
         draw.text((name_x, name_y), company_name, fill=name_color, font=name_font)
@@ -1739,15 +1752,20 @@ class HTMLSlideGenerator:
 
             # Use a custom marker icon if available (recommended).
             pin_icon = self._load_map_pin_icon(project_root)
-            marker_rgb = None
+            # Force marker + label pill to requested yellow: #FFF200
+            marker_rgb = (255, 242, 0)
 
             if pin_icon:
-                marker_rgb = self._dominant_visible_rgb(pin_icon)
                 # Resize while preserving aspect ratio (anchor bottom-center on pin_x/pin_y).
                 target_h = 64
                 scale = target_h / float(pin_icon.size[1])
                 target_w = max(1, int(pin_icon.size[0] * scale))
                 pin_icon = pin_icon.resize((target_w, target_h), Image.Resampling.LANCZOS)
+                # Tint the icon to the requested color for consistency.
+                try:
+                    pin_icon = self._tint_rgba_to_color(pin_icon, marker_rgb)
+                except Exception:
+                    pass
                 w, h = pin_icon.size
                 paste_pin_x = int(pin_x - w / 2)
                 paste_pin_y = int(pin_y - h)
@@ -1755,7 +1773,7 @@ class HTMLSlideGenerator:
                 draw = ImageDraw.Draw(slide)
             else:
                 # Fallback: draw the pin (yellow location pin icon - teardrop shape with circular hole)
-                yellow = (255, 215, 0)
+                yellow = (255, 242, 0)  # #FFF200
                 black = (0, 0, 0)
                 
                 # Pin dimensions - larger for visibility
@@ -1836,11 +1854,11 @@ class HTMLSlideGenerator:
                 draw = ImageDraw.Draw(slide)
             
             # Place the city name label with yellow block (similar to other yellow blocks)
-            yellow = (255, 215, 0)  # Yellow for the block
+            yellow = (255, 242, 0)  # #FFF200
             black = (0, 0, 0)  # Black text on yellow background
             
-            # Use larger, extra-bold appearance for location text
-            location_font = self._load_font(32, bold=True)
+            # Location label font: georgiai.ttf (bundled in assets/fonts)
+            location_font = self._load_font(32, bold=False, preferred_family="georgiai")
             location_stroke_width = 1
             
             # Get text dimensions with larger font
@@ -1869,16 +1887,12 @@ class HTMLSlideGenerator:
             if label_bg:
                 bg_resized = self._resize_pill_bg(label_bg, int(box_width), int(box_height))
                 # Tint label background to match marker color (when available)
-                if marker_rgb:
-                    bg_resized = self._tint_rgba_to_color(bg_resized, marker_rgb)
-                # Make the block slightly darker for a more natural look
-                bg_resized = self._darken_rgba(bg_resized, factor=0.88)
+                bg_resized = self._tint_rgba_to_color(bg_resized, marker_rgb)
                 slide.paste(bg_resized, (int(box_x), int(box_y)), bg_resized)
                 draw = ImageDraw.Draw(slide)
             else:
                 # Fallback: plain rectangle
-                darker_yellow = (235, 195, 0)
-                draw.rectangle([(box_x, box_y), (box_x + box_width, box_y + box_height)], fill=darker_yellow)
+                draw.rectangle([(box_x, box_y), (box_x + box_width, box_y + box_height)], fill=yellow)
             
             # Draw location text in the yellow box (centered with padding)
             text_x = box_x + box_padding_x
@@ -1922,15 +1936,21 @@ class HTMLSlideGenerator:
         
         # 6. Replace Background text (aligned with founders, wider text area, bigger font, transparent background)
         bg_block_y = 600  # Approximate Y position of background yellow block
-        bg_text_y = bg_block_y + 50  # Text starts below yellow block
+        bg_text_y = bg_block_y + 5  # Text starts below yellow block (smaller gap)
         bg_text_x = founders_text_x  # Aligned with founders (moved left from 400 to match founders at 320)
-        bg_text_width = 700  # Wider text area (was 500) to fill space more
+        # Allow background copy to use more horizontal room (without running into the headshot on the right).
+        bg_text_width = 800
+
+        # Background font: +2px vs Founders/Co-Investors (slightly bigger)
+        bg_font = self._load_font(30, bold=False, preferred_family="Inter_28pt-Regular")
+        bg_line_spacing = 37
+
         words = background_text.split()
         lines = []
         current_line = []
         for word in words:
             test_line = ' '.join(current_line + [word])
-            bbox = draw.textbbox((0, 0), test_line, font=body_font)
+            bbox = draw.textbbox((0, 0), test_line, font=bg_font)
             if bbox[2] - bbox[0] < bg_text_width:  # Wider width for background
                 current_line.append(word)
             else:
@@ -1943,12 +1963,9 @@ class HTMLSlideGenerator:
         # Get text color from template (don't erase background - keep it transparent)
         bg_color = self._get_text_color_from_template(template, bg_text_x, bg_text_y, bg_text_width, 200)
         
-        # Use slightly bigger font for background text
-        bg_font = self._load_font(32)
-        
         # Draw text directly without erasing background (transparent)
         for i, line in enumerate(lines[:10]):
-            draw.text((bg_text_x, bg_text_y + i * 36), line, fill=bg_color, font=bg_font)  # Slightly more spacing
+            draw.text((bg_text_x, bg_text_y + i * bg_line_spacing), line, fill=bg_color, font=bg_font)
         
         # 7. Replace headshots (below map, moved left, bigger size, transparent)
         headshot_processed = False
@@ -2298,105 +2315,115 @@ class HTMLSlideGenerator:
         # Find Slauson&Co position in sidebar (bottom of sidebar)
         slauson_y = height - 200  # Approximate position of "SLAUSON&CO." text (bottom of sidebar)
         
-        # Parse investment stage to format as "STAGE QUARTER YEAR" (e.g., "SEED Q2 2024")
-        # Format is typically like "SEED Q2, 2024" or "PRE-SEED Q2, 2024"
+        # Parse investment stage to match the template look (e.g., "SEED Q4, 2024")
+        # Input format is typically like "SEED Q2, 2024" or "PRE-SEED Q2, 2024"
         stage_parts = investment_stage.upper().split(',')
         if len(stage_parts) >= 2:
             stage_quarter = stage_parts[0].strip()  # "SEED Q2" or "PRE-SEED Q2"
             year_text = stage_parts[1].strip()  # "2024"
-            # Combine into "STAGE QUARTER YEAR" format
-            stage_text = f"{stage_quarter} {year_text}"  # "SEED Q2 2024"
+            # Combine into "STAGE Q#, YYYY" format
+            stage_text = f"{stage_quarter}, {year_text}"  # "SEED Q2, 2024"
         else:
             stage_text = investment_stage.upper()
         
-        # Use bigger font size for better visibility (36-46pt range)
-        stage_font_size = 40
-        sidebar_bold_font = self._load_font(stage_font_size, bold=False)  # Less bold for easier reading
-        
-        # Don't erase background - keep it transparent
-        # Use black color
-        stage_color = (0, 0, 0)  # Black color
-        stroke_color = (50, 50, 50)  # Dark grey for stroke (thicker effect)
-        
-        # Draw investment stage at the TOP of sidebar (opposite end from Slauson&Co)
-        # Align with Slauson&Co position (which is at the bottom of sidebar, left-aligned)
-        # Slauson&Co is positioned more to the left, around x=10-20 in the sidebar
-        sidebar_width = 200
-        slauson_x = 10  # More to the left to align with Slauson&Co text
-        
-        stage_top_y = 80  # Near the top of the sidebar
-        
-        # Get text dimensions first to calculate proper image size
-        temp_img = Image.new('RGBA', (1000, 1000), (0, 0, 0, 0))
-        temp_draw = ImageDraw.Draw(temp_img)
-        bbox = temp_draw.textbbox((0, 0), stage_text, font=sidebar_bold_font)
-        text_width = bbox[2] - bbox[0]
-        text_height = bbox[3] - bbox[1]
-        
-        # Create image for single-line text, rotated -90 degrees (same as SLAUSON&CO)
-        # When rotated -90 degrees, width becomes height and height becomes width
-        padding = 60  # Reduced padding to prevent excessive scaling
-        stage_img_width = text_height + padding * 2  # Width after rotation
-        stage_img_height = text_width + padding * 2  # Height after rotation
-        
-        # Ensure minimum size
-        stage_img_width = max(stage_img_width, 400)
-        stage_img_height = max(stage_img_height, 700)
-        
-        stage_img = Image.new('RGBA', (stage_img_width, stage_img_height), (0, 0, 0, 0))
-        stage_draw = ImageDraw.Draw(stage_img)
-        
-        # Draw text normally (no word reversal) at the top of the image
-        # When rotated -90 degrees, the top becomes the right side
-        # Position text at top so after rotation it's properly positioned
-        # Center text horizontally before rotation
-        text_x = (stage_img_width // 2 - text_width // 2) 
-        text_y = padding  # Position at top edge - becomes right edge after rotation
-        
-        # Draw text without heavy stroke (cleaner, less bold appearance)
-        # Just draw the main text - no stroke effect
-        stage_draw.text(
-            (text_x, text_y),
-            stage_text,
-            fill=(0, 0, 0),              # pure black
-            font=sidebar_bold_font,
-            # Pillow/FreeType expects an integer stroke width (floats can crash on some versions).
-            stroke_width=2,               # key: thickness (2–4 works well)
-            stroke_fill=(0, 0, 0),       # same color = heavier weight
-        )
-
-        
-        # Rotate so text reads bottom -> top (same as SLAUSON&CO)
-        stage_img = stage_img.rotate(90, expand=True)
-        
-        # --- Fit the rotated image into the sidebar safely ---
+        # --- Render investment stage (fix "squished" look) ---
+        # Keep the old font behavior (no preferred_family), but avoid heavy multi-pass stroke
+        # and avoid large downscales after rotation (both make the text look condensed).
         sidebar_w = 200
-        top_margin = 55  # Adjusted for better fit
-        bottom_margin = 15  # Reduced to give more usable height
-        side_margin = 6  # Reduced to give more usable width
-        
+        # Keep the sidebar stage text readable but not comically large.
+        # Width (after rotation) is driven mostly by font height, so side margins + padding
+        # are the safest knobs to make it "reasonable" without reintroducing squish/blur.
+        top_margin = 35
+        bottom_margin = 25
+        # Constrain usable width so the font size matches the template (like your screenshot).
+        side_margin = 35
         max_w = sidebar_w - 2 * side_margin
-        max_h = height - top_margin - bottom_margin  # height is slide height (1080)
-        
-        final_w, final_h = stage_img.size
-        
-        # Scale DOWN if needed to fit, but don't let it get microscopic
-        scale = min(max_w / final_w, max_h / final_h, 1.0)
-        scale = max(scale, 0.85)  # Minimum scale floor to prevent tiny text
-        if scale < 1.0:
-            new_w = max(1, int(final_w * scale))
-            new_h = max(1, int(final_h * scale))
-            stage_img = stage_img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+        max_h = height - top_margin - bottom_margin
+
+        stage_color = (0, 0, 0)
+        # Add back some padding so the text doesn't dominate the sidebar.
+        padding = 10
+
+        stage_img = None
+        final_w = final_h = 0
+
+        # Choose the largest font size that fits without resizing the rotated bitmap.
+        # Cap the max size so it stays visually consistent with the template.
+        for fs in range(55, 11, -1):
+            # Stage text should use the same font family as the title (Bebas Neue).
+            stage_font = self._load_font(fs, bold=False, preferred_family="BebasNeue")
+
+            tmp = Image.new("RGBA", (2000, 2000), (0, 0, 0, 0))
+            td = ImageDraw.Draw(tmp)
+            bbox = td.textbbox((0, 0), stage_text, font=stage_font)
+            text_w = bbox[2] - bbox[0]
+            text_h = bbox[3] - bbox[1]
+
+            img = Image.new("RGBA", (max(1, int(text_w + padding * 2)), max(1, int(text_h + padding * 2))), (0, 0, 0, 0))
+            d = ImageDraw.Draw(img)
+            d.text(
+                (padding - bbox[0], padding - bbox[1]),
+                stage_text,
+                fill=stage_color,
+                font=stage_font,
+                stroke_width=1,
+                stroke_fill=stage_color,
+            )
+
+            rot = img.rotate(90, expand=True, resample=Image.Resampling.BICUBIC)
+            w, h = rot.size
+            if w <= max_w and h <= max_h:
+                stage_img = rot
+                final_w, final_h = w, h
+                break
+
+        if stage_img is None:
+            # Last resort: render at a small size; still no post-rotate downscale.
+            stage_font = self._load_font(18, bold=False)
+            tmp = Image.new("RGBA", (2000, 2000), (0, 0, 0, 0))
+            td = ImageDraw.Draw(tmp)
+            bbox = td.textbbox((0, 0), stage_text, font=stage_font)
+            text_w = bbox[2] - bbox[0]
+            text_h = bbox[3] - bbox[1]
+            img = Image.new("RGBA", (max(1, int(text_w + padding * 2)), max(1, int(text_h + padding * 2))), (0, 0, 0, 0))
+            d = ImageDraw.Draw(img)
+            d.text(
+                (padding - bbox[0], padding - bbox[1]),
+                stage_text,
+                fill=stage_color,
+                font=stage_font,
+                stroke_width=1,
+                stroke_fill=stage_color,
+            )
+            stage_img = img.rotate(90, expand=True, resample=Image.Resampling.BICUBIC)
             final_w, final_h = stage_img.size
-        
+
         # Compute placement
-        paste_x = 50            # nudge stage label slightly right
-        paste_y = top_margin + 30 # lower it
-        
+        # Center the stage text in the sidebar and place it near the top like the template.
+        paste_x = max(0, (sidebar_w - final_w) // 2)
+        paste_y = 110
+
         # Clamp so it can NEVER go off-canvas
-        paste_x = max(0, min(paste_x, (sidebar_w - final_w - 5)))
-        paste_y = max(0, min(paste_y, height - final_h))
-        
+        paste_x = max(0, min(paste_x, sidebar_w - final_w)) - 10
+        paste_y = max(0, min(paste_y, height - final_h)) - 10
+
+        # Clear the existing baked-in sidebar stage text under our overlay.
+        # The template already contains stage text; drawing on top can look "squished"/blurry.
+        try:
+            # Sample the sidebar background (exclude black text) to get the orange fill.
+            sidebar_bg_rgb = self._get_dominant_color(
+                template,
+                region=(10, 300, 180, 300),
+                exclude_colors=[(0, 0, 0), (255, 255, 255)],
+            )
+            x0 = max(0, paste_x - 4)
+            y0 = max(0, paste_y - 4)
+            x1 = min(sidebar_w, paste_x + final_w + 4)
+            y1 = min(height, paste_y + final_h + 4)
+            draw.rectangle([(x0, y0), (x1, y1)], fill=sidebar_bg_rgb)
+        except Exception:
+            pass
+
         slide.paste(stage_img, (paste_x, paste_y), stage_img)
 
         # --- Per-slide tracking watermark (visible, for human traceability) ---
