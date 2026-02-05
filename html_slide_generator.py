@@ -205,24 +205,29 @@ class HTMLSlideGenerator:
             font_candidates.append("/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf")
         font_candidates.append("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf")
         font_candidates.append("/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf")
-        # Try to find fonts via fontconfig (common on Linux)
-        try:
-            import subprocess
-            result = subprocess.run(['fc-list'], capture_output=True, text=True, timeout=1)
-            if result.returncode == 0:
-                # Look for DejaVu or Liberation in font list
-                for line in result.stdout.split('\n'):
-                    if 'DejaVu' in line or 'Liberation' in line:
-                        font_path = line.split(':')[0] if ':' in line else None
-                        if font_path and os.path.exists(font_path):
-                            if _looks_italic(font_path):
-                                continue
-                            if bold and 'Bold' in font_path:
-                                font_candidates.insert(0, font_path)
-                            elif not bold and 'Bold' not in font_path:
-                                font_candidates.insert(0, font_path)
-        except Exception:
-            pass  # Fontconfig not available, continue with hardcoded paths
+        # Try to find fonts via fontconfig (common on Linux).
+        #
+        # Important: if a preferred_family is requested, do NOT insert DejaVu/Liberation
+        # ahead of the preferred family candidates (Railway/Nix often returns DejaVuSerif
+        # which would override BebasNeue even when it's bundled).
+        if not preferred_family:
+            try:
+                import subprocess
+                result = subprocess.run(['fc-list'], capture_output=True, text=True, timeout=1)
+                if result.returncode == 0:
+                    # Look for DejaVu or Liberation in font list
+                    for line in result.stdout.split('\n'):
+                        if 'DejaVu' in line or 'Liberation' in line:
+                            font_path = line.split(':')[0] if ':' in line else None
+                            if font_path and os.path.exists(font_path):
+                                if _looks_italic(font_path):
+                                    continue
+                                if bold and 'Bold' in font_path:
+                                    font_candidates.insert(0, font_path)
+                                elif not bold and 'Bold' not in font_path:
+                                    font_candidates.insert(0, font_path)
+            except Exception:
+                pass  # Fontconfig not available, continue with hardcoded paths
         
         # macOS fonts (for local development only)
         if bold:
