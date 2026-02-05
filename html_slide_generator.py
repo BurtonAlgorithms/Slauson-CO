@@ -49,6 +49,20 @@ class HTMLSlideGenerator:
             project_root = script_dir
         
         print(f"DEBUG: script_dir={script_dir}, project_root={project_root}")
+
+        # Optional debug: prove which bundled fonts are present at runtime (Railway/Render shells aren't always available).
+        if os.getenv("DEBUG_FONTS", "").strip().lower() in ("1", "true", "yes", "y", "on"):
+            try:
+                fonts_dir = os.path.join(script_dir, "assets", "fonts")
+                exists = os.path.exists(fonts_dir)
+                print(f"DEBUG_FONTS: assets/fonts exists={exists} path={fonts_dir}")
+                if exists:
+                    files = sorted(os.listdir(fonts_dir))
+                    print(f"DEBUG_FONTS: assets/fonts files={files}")
+                    bebas_path = os.path.join(fonts_dir, "BebasNeue-Regular.ttf")
+                    print(f"DEBUG_FONTS: BebasNeue-Regular.ttf exists={os.path.exists(bebas_path)} size={os.path.getsize(bebas_path) if os.path.exists(bebas_path) else 'N/A'}")
+            except Exception as e:
+                print(f"DEBUG_FONTS: could not inspect bundled fonts: {e}")
         
         # Slide template path - check config first, then try default locations
         self.template_path = getattr(Config, 'SLIDE_TEMPLATE_PATH', None) if hasattr(Config, 'SLIDE_TEMPLATE_PATH') else None
@@ -217,6 +231,8 @@ class HTMLSlideGenerator:
         font_candidates.append("/System/Library/Fonts/Helvetica.ttc")
         font_candidates.append("/System/Library/Fonts/Arial.ttf")
 
+        debug_fonts = os.getenv("DEBUG_FONTS", "").strip().lower() in ("1", "true", "yes", "y", "on")
+
         for path in font_candidates:
             try:
                 if os.path.exists(path) or not os.path.isabs(path):
@@ -224,11 +240,23 @@ class HTMLSlideGenerator:
                     if _looks_italic(path):
                         continue
                     font = ImageFont.truetype(path, size)
-                    if os.getenv("DEBUG_FONTS", "").strip() in ("1", "true", "yes", "y", "on"):
+                    if debug_fonts:
                         print(f"✓ Loaded font: {path} (size={size}, bold={bold})")
                     return font
             except (OSError, IOError, Exception) as e:
-                # Silently continue to next candidate
+                # Continue to next candidate, but log *targeted* failures when debugging.
+                if debug_fonts:
+                    try:
+                        base = os.path.basename(path).lower()
+                        # Only log likely-relevant failures to avoid spam.
+                        if (
+                            (preferred_family and preferred_family.lower().replace(" ", "") in base.replace(" ", ""))
+                            or "bebas" in base
+                            or path.startswith("/app/assets/")
+                        ):
+                            print(f"✗ Failed to load font: {path} (size={size}, bold={bold}) err={e}")
+                    except Exception:
+                        pass
                 continue
         
         # Fallback: Pillow bundles DejaVu fonts in most builds; use them if available.
