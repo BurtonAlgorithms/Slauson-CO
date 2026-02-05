@@ -405,6 +405,38 @@ def handle_onboarding():
             else:
                 company_data["co_investors"] = []
 
+        # Frontend edit payload normalization:
+        # If the UI sends a combined "stage_quarter" field, map it to the generator's expected
+        # investment stage display string.
+        #
+        # Examples:
+        # - stage_quarter="Seed Q1 2025" -> "Seed Q1, 2025" (add comma before year)
+        # - stage_quarter="SEED Q4" + investment_date="2024-11-15" -> "SEED Q4, 2024"
+        # - stage_quarter="PRE-SEED Q2, 2024" -> keep as-is
+        if not company_data.get("investment_stage"):
+            stage_quarter = (company_data.get("stage_quarter") or "").strip()
+            if stage_quarter:
+                year = ""
+                inv_date = (company_data.get("investment_date") or "").strip()
+                # Try extracting year from YYYY-MM-DD or similar
+                if len(inv_date) >= 4 and inv_date[:4].isdigit():
+                    year = inv_date[:4]
+                tokens = stage_quarter.replace(",", " ").split()
+                year_in_stage = next((tok for tok in reversed(tokens) if len(tok) == 4 and tok.isdigit()), "")
+
+                # If stage_quarter already includes a year, keep it but normalize to "..., YYYY" when possible.
+                if year_in_stage:
+                    if "," in stage_quarter:
+                        company_data["investment_stage"] = stage_quarter
+                    else:
+                        # Convert "Seed Q1 2025" -> "Seed Q1, 2025"
+                        stage_part = stage_quarter.rsplit(year_in_stage, 1)[0].strip()
+                        company_data["investment_stage"] = f"{stage_part}, {year_in_stage}".strip()
+                elif year:
+                    company_data["investment_stage"] = f"{stage_quarter}, {year}"
+                else:
+                    company_data["investment_stage"] = stage_quarter
+
         # Accept Slide Job ID from payload (nested or flat), normalize key
         if "slide_job_id" not in company_data:
             slide_job_id_from_payload = (
