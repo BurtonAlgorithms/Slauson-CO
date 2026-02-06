@@ -499,6 +499,26 @@ def handle_onboarding():
             "last_edited": data.get("notion_last_edited")
         }
 
+        # Edit-mode guard:
+        # If the caller is explicitly requesting an edit/replace but doesn't have a Slide Job ID,
+        # we should *not* create a new slide or replace anything. This prevents "edit" from
+        # accidentally appending a brand-new slide when a slide was never created in the first place.
+        #
+        # (On the frontend, Slide Job ID should only exist once an initial slide has been created.)
+        force_replace = str(data.get("force_replace", "")).strip().lower() in ("1", "true", "yes", "y")
+        incoming_slide_job_id = (company_data.get("slide_job_id") or "").strip()
+        if force_replace and not incoming_slide_job_id:
+            print("⏭️  Edit requested but Slide Job ID is empty; skipping slide generation/upload.")
+            return jsonify(
+                {
+                    "success": True,
+                    "skipped": True,
+                    "reason": "edit_requested_but_missing_slide_job_id",
+                    "notion_page_id": notion_metadata.get("page_id"),
+                    "slide_job_id": "",
+                }
+            ), 200
+
         # Delete mode: allow deleting an existing slide for a Notion entry.
         # Frontend will send company_data__delete_slide (bool) and a job id in company_data__slide_job_id.
         delete_slide = _truthy(
@@ -509,7 +529,7 @@ def handle_onboarding():
 
         # Ensure we have a Slide Job ID for this run (used for per-slide tracking + Notion property)
         # Prefer an incoming Slide Job ID from Notion/Zapier; otherwise generate one.
-        if not company_data.get("slide_job_id"):
+        if not incoming_slide_job_id:
             company_data["slide_job_id"] = _generate_slide_job_id(notion_metadata.get("page_id"))
 
         # If delete_slide is requested, delete the slide associated with this Notion page/job id and exit early.
