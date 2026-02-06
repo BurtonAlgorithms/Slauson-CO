@@ -260,6 +260,19 @@ def download_file_from_url(url: str, output_path: str):
                 print(f"  Found download link after virus scan warning, retrying...")
                 response = requests.get(download_url, stream=True, headers=headers, allow_redirects=True)
                 response.raise_for_status()
+        else:
+            # Common failure mode: Drive "view" pages or permission gates return HTML, not the image bytes.
+            # Saving that HTML as .png then causes Pillow: "cannot identify image file".
+            if file_id:
+                raise Exception(
+                    "Google Drive URL did not return a file download (got HTML). "
+                    "Make sure the file is shared as 'Anyone with the link' and use a direct download URL like "
+                    f"'https://drive.google.com/uc?export=download&id={file_id}'."
+                )
+            raise Exception(
+                "URL did not return a file download (got HTML). Make sure the URL points directly to an image file "
+                "(PNG/JPG/WebP), not a webpage."
+            )
     
     with open(output_path, 'wb') as f:
         for chunk in response.iter_content(chunk_size=8192):

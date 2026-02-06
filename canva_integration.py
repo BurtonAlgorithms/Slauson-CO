@@ -28,11 +28,12 @@ class CanvaIntegration:
         self._refresh_token = None
         self.token_file = "canva_tokens.json"
         self._token_store = CanvaTokenStore.from_env()
-        # Optional: move imported designs into a specific Canva folder
+        # Optional: move imported designs into a specific Canva folder.
+        # If not explicitly configured, default to the Slauson folder requested.
         self.destination_folder_id = (
             os.getenv("CANVA_DESTINATION_FOLDER_ID")
             or os.getenv("CANVA_FOLDER_ID")
-            or None
+            or "FAHAWSvTMQY"
         )
         self._load_tokens()
 
