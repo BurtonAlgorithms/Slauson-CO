@@ -289,6 +289,35 @@ class HTMLSlideGenerator:
         )
         return ImageFont.load_default()
 
+    def _parse_name_list(self, value) -> list:
+        """
+        Normalize a founders/co-investors field into a list of non-empty strings.
+        Accepts:
+        - list[str]
+        - comma-separated string
+        - newline-separated string
+        """
+        if not value:
+            return []
+        if isinstance(value, list):
+            items = value
+        else:
+            s = str(value)
+            # If already newline-separated, split on newlines first.
+            if "\n" in s:
+                items = s.splitlines()
+            else:
+                items = s.split(",") if "," in s else [s]
+        out = []
+        for it in items:
+            try:
+                t = str(it).strip()
+            except Exception:
+                t = ""
+            if t:
+                out.append(t)
+        return out
+
     def _make_white_background_transparent(self, img: Image.Image, threshold: int = 245) -> Image.Image:
         """
         Convert near-white pixels to transparent.
@@ -1535,19 +1564,14 @@ class HTMLSlideGenerator:
         
         # Extract company data
         company_name = company_data.get('name', '').upper()
-        founders_text = company_data.get('founders', '')
-        if isinstance(founders_text, list):
-            founders_text = '\n'.join(founders_text)  # Use newlines instead of commas
-        elif isinstance(founders_text, str) and ',' in founders_text:
-            # Convert comma-separated to newline-separated
-            founders_text = '\n'.join([f.strip() for f in founders_text.split(',')])
-        
-        co_investors_text = company_data.get('co_investors', '')
-        if isinstance(co_investors_text, list):
-            co_investors_text = '\n'.join(co_investors_text)  # Use newlines instead of commas
-        elif isinstance(co_investors_text, str) and ',' in co_investors_text:
-            # Convert comma-separated to newline-separated
-            co_investors_text = '\n'.join([f.strip() for f in co_investors_text.split(',')])
+        # Hard caps to avoid overflow into other regions:
+        # - Founders: max 3 names
+        # - Co-investors: max 5 names
+        founders_items = self._parse_name_list(company_data.get("founders", ""))[:3]
+        co_investors_items = self._parse_name_list(company_data.get("co_investors", ""))[:5]
+
+        founders_text = "\n".join(founders_items)
+        co_investors_text = "\n".join(co_investors_items)
         
         background_text = company_data.get('background', company_data.get('description', ''))
         # Extract city + state from address - handle formats like
@@ -1917,8 +1941,8 @@ class HTMLSlideGenerator:
         founders_color = self._get_text_color_from_template(template, founders_text_x, founders_text_y, 600, 100)
         
         # Don't erase background - keep it transparent (no black box)
-        # Draw founders text with newlines directly
-        founders_lines = founders_text.split('\n')
+        # Draw founders text (max 3 names)
+        founders_lines = founders_text.split('\n') if founders_text else []
         for i, line in enumerate(founders_lines):
             draw.text((founders_text_x, founders_text_y + i * 35), line, fill=founders_color, font=body_font)
         
@@ -1929,8 +1953,8 @@ class HTMLSlideGenerator:
         investors_color = self._get_text_color_from_template(template, investors_text_x, investors_text_y, 600, 100)
         
         # Don't erase background - keep it transparent (no black box)
-        # Draw co-investors text with newlines directly (separate text box)
-        investors_lines = co_investors_text.split('\n')
+        # Draw co-investors text (max 5 names)
+        investors_lines = co_investors_text.split('\n') if co_investors_text else []
         for i, line in enumerate(investors_lines):
             draw.text((investors_text_x, investors_text_y + i * 35), line, fill=investors_color, font=body_font)
         
@@ -2738,12 +2762,9 @@ class HTMLSlideGenerator:
             )
         
         # 6) Founders text (editable) - from PIL code: founders_text_x = 320, founders_text_y = 415
-        founders_text = company_data.get("founders", "")
+        founders_items = self._parse_name_list(company_data.get("founders", ""))[:3]
+        founders_text = "\n".join(founders_items)
         if founders_text:
-            if isinstance(founders_text, list):
-                founders_text = '\n'.join(founders_text)
-            elif isinstance(founders_text, str) and ',' in founders_text:
-                founders_text = '\n'.join([f.strip() for f in founders_text.split(',')])
             
             # Position from PIL: founders_text_x = 320, founders_text_y = 415
             founders_text_x_px = 320
@@ -2764,12 +2785,9 @@ class HTMLSlideGenerator:
             run.font.color.rgb = RGBColor(255, 255, 255)  # White
         
         # 7) Co-investors text (editable) - from PIL code: investors_text_x = 650, investors_text_y = 415
-        co_investors_text = company_data.get("co_investors", "")
+        co_investors_items = self._parse_name_list(company_data.get("co_investors", ""))[:5]
+        co_investors_text = "\n".join(co_investors_items)
         if co_investors_text:
-            if isinstance(co_investors_text, list):
-                co_investors_text = '\n'.join(co_investors_text)
-            elif isinstance(co_investors_text, str) and ',' in co_investors_text:
-                co_investors_text = '\n'.join([f.strip() for f in co_investors_text.split(',')])
             
             # Position from PIL: investors_text_x = 650, investors_text_y = 415
             investors_text_x_px = 650
