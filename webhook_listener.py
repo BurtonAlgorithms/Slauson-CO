@@ -608,7 +608,9 @@ def handle_onboarding():
                     or "Portfolio Slides.pdf"
                 )
 
-                target_file_id = static_file_id or drive.find_file_id_by_name(static_file_name, parent_folder_id=drive_folder_id)
+                target_file_id = static_file_id or drive.find_file_id_by_name(
+                    static_file_name, parent_folder_id=drive_folder_id, fallback_global=False
+                )
                 if not target_file_id:
                     results["errors"].append("No target Drive master PDF found to delete from.")
                     return jsonify(results), 404
@@ -1051,9 +1053,22 @@ def handle_onboarding():
 
                     # Resolve static file ID by name if only name is provided
                     if not static_file_id and static_file_name:
-                        target_file_id = drive.find_file_id_by_name(static_file_name, parent_folder_id=drive_folder_id)
-                        if target_file_id:
-                            print(f"   Found static Drive file by name '{static_file_name}': {target_file_id}")
+                        # First, check the folder listing we already fetched (fastest, guaranteed in-folder)
+                        if all_files:
+                            for f in all_files:
+                                if f.get("name") == static_file_name:
+                                    target_file_id = f["id"]
+                                    print(f"   Found static Drive file in folder listing '{static_file_name}': {target_file_id}")
+                                    break
+                        # Fallback to API search scoped to folder only (no global fallback)
+                        if not target_file_id:
+                            target_file_id = drive.find_file_id_by_name(
+                                static_file_name,
+                                parent_folder_id=drive_folder_id,
+                                fallback_global=False,
+                            )
+                            if target_file_id:
+                                print(f"   Found static Drive file by name '{static_file_name}': {target_file_id}")
                     elif static_file_id:
                         target_file_id = static_file_id
 

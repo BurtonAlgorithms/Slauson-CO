@@ -33,10 +33,7 @@ def _resolve_drive_pdf_file_id(drive: GoogleDriveIntegration, folder_id: str) ->
     if file_id:
         return file_id
     filename = os.getenv("GOOGLE_DRIVE_STATIC_FILE_NAME") or "Portfolio Slides.pdf"
-    found = drive.find_file_id_by_name(filename, parent_folder_id=folder_id)
-    if not found:
-        # Fallback: global search
-        found = drive.find_file_id_by_name(filename, parent_folder_id=None)
+    found = drive.find_file_id_by_name(filename, parent_folder_id=folder_id, fallback_global=False)
     return found or ""
 
 

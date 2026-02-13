@@ -284,10 +284,14 @@ class GoogleDriveIntegration:
         filename: str,
         parent_folder_id: Optional[str] = None,
         mime_type: str = "application/pdf",
+        fallback_global: bool = True,
     ) -> Optional[str]:
         """
         Find the first file ID matching a given name (optionally within a folder).
-        If not found in the folder, falls back to global search.
+        If *fallback_global* is True (default) and the file is not found in
+        the folder, falls back to a global search across all of Drive.
+        Set fallback_global=False when it is critical that the result lives
+        inside the target folder (e.g. the master Portfolio PDF).
         """
         if not self.service:
             raise ValueError("Google Drive service not initialized")
@@ -306,7 +310,7 @@ class GoogleDriveIntegration:
             return files[0]["id"] if files else None
 
         # First, try within the parent (if provided)
-        query_parts = [f"name = '{filename}'", f"mimeType = '{mime_type}'"]
+        query_parts = [f"name = '{filename}'", f"mimeType = '{mime_type}'", "trashed = false"]
         if parent_folder_id:
             query_parts.append(f"'{parent_folder_id}' in parents")
         query = " and ".join(query_parts)
@@ -317,9 +321,11 @@ class GoogleDriveIntegration:
         except HttpError as error:
             print(f"Warning: Google Drive search error (scoped): {error}")
 
-        # Fallback: global search by name
+        # Fallback: global search by name (only if allowed)
+        if not fallback_global:
+            return None
         try:
-            global_query = f"name = '{filename}' and mimeType = '{mime_type}'"
+            global_query = f"name = '{filename}' and mimeType = '{mime_type}' and trashed = false"
             file_id = _search(global_query)
             if file_id:
                 print(f"   Found '{filename}' via global search (outside folder).")
