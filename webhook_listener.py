@@ -1212,24 +1212,28 @@ def handle_onboarding():
                                             writer.add_page(page)
 
                                 if not replaced:
-                                    # In edit mode, never append on failure to locate the old slide.
-                                    if force_replace:
+                                    # In edit mode, guard against accidentally duplicating the entire deck.
+                                    # A single-page PDF is a legitimate new company slide → safe to append.
+                                    # A multi-page PDF with no match is suspicious → refuse.
+                                    if force_replace and len(new_reader.pages) > 1:
                                         raise Exception(
                                             "Edit requested (force_replace=true) but could not locate existing slide to replace. "
-                                            "Refusing to append to avoid duplicating the deck. "
+                                            "Refusing to append multi-page PDF to avoid duplicating the deck. "
                                             "Fix: ensure Slide Job Index has an entry for this Notion page (or send the prior Slide Job ID)."
                                         )
                                     print("   Could not find old slide; appending new slide at end...")
+                                    writer = PdfWriter()
                                     for p in old_reader.pages:
                                         writer.add_page(p)
                                     for p in new_reader.pages:
                                         writer.add_page(p)
                             else:
                                 # No existing slides for this page, just append
-                                if force_replace:
+                                # Guard: refuse multi-page PDFs to prevent deck duplication
+                                if force_replace and len(new_reader.pages) > 1:
                                     raise Exception(
                                         "Edit requested (force_replace=true) but no existing slide index entry was found. "
-                                        "Refusing to append to avoid duplicating the deck. "
+                                        "Refusing to append multi-page PDF to avoid duplicating the deck. "
                                         "Fix: create the slide first (so an index entry exists) or provide the Slide Job ID."
                                     )
                                 print("   Appending new slide(s) to existing PDF...")
