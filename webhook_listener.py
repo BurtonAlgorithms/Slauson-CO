@@ -302,6 +302,28 @@ def handle_image_input(image_data, temp_dir: str, filename: str) -> str:
         image_bytes = base64.b64decode(image_data)
         with open(file_path, 'wb') as f:
             f.write(image_bytes)
+
+    # If the "image" is actually an SVG, convert to PNG so Pillow can open it later.
+    # (Pillow does not natively support SVG.)
+    try:
+        with open(file_path, "rb") as f:
+            head = f.read(2048)
+        head_lower = head.lower()
+        is_svg = (b"<svg" in head_lower) or (b"image/svg+xml" in head_lower) or str(file_path).lower().endswith(".svg")
+        if is_svg:
+            png_path = os.path.splitext(file_path)[0] + ".png"
+            try:
+                import cairosvg  # type: ignore
+            except Exception:
+                raise Exception(
+                    "Logo appears to be an SVG. This server can't convert SVG→PNG because CairoSVG isn't installed. "
+                    "Either provide a PNG/JPG/WebP logo_url, or add `CairoSVG` to requirements and redeploy."
+                )
+            cairosvg.svg2png(bytestring=head + f.read() if False else open(file_path, "rb").read(), write_to=png_path)
+            file_path = png_path
+    except Exception as e:
+        # Bubble up a helpful error (caller will catch + warn/placeholder as needed)
+        raise
     
     return file_path
 
@@ -468,6 +490,12 @@ def handle_onboarding():
         print(f"Founders: {company_data.get('founders', [])}")
         print(f"Co-investors: {company_data.get('co_investors', [])}")
         print(f"Background: '{company_data.get('background', '')[:50]}...' (first 50 chars)")
+
+        # Default location behavior:
+        # If address/location is missing/blank, default to San Francisco so map + slide are stable.
+        if not (company_data.get("address") or "").strip() and not (company_data.get("location") or "").strip():
+            company_data["address"] = "San Francisco, CA"
+            company_data["location"] = "San Francisco, CA"
         
         # Validate required fields
         required_fields = {
@@ -841,7 +869,9 @@ def handle_onboarding():
                 
                 # Step 2: Generate map with Gemini
                 print("Generating map with Gemini...")
-                location = company_data.get("address", company_data.get("location", ""))
+                location = (company_data.get("address") or company_data.get("location") or "").strip()
+                if not location:
+                    location = "San Francisco, CA"
                 # Extract city name if address is full address
                 if "," in location:
                     location = location.split(",")[0].strip()
@@ -1093,11 +1123,20 @@ def handle_onboarding():
                                         notion_page_id_for_index = pid
                                         break
 
+                            # Safety: in edit mode, NEVER append if we can't confidently target an existing slide.
+                            # This prevents the master PDF from ballooning (e.g., 12 pages -> 23 pages) when a replace
+                            # lookup fails and code would otherwise append.
+                            if force_replace:
+                                # If we can't resolve any target key, refuse to proceed.
+                                if not (notion_page_id_for_index or existing_slide_job_id or slide_job_id or company_name):
+                                    raise Exception("Edit requested (force_replace=true) but no identifying key provided to locate existing slide.")
+
                             # Replace (edit) if this Notion page already has a slide in our index,
                             # or if the caller explicitly forces replacement.
                             # This does NOT rely on Notion API lookups; the Drive-backed index is source-of-truth.
                             has_index_entry = bool(notion_page_id_for_index and notion_page_id_for_index in entries)
-                            should_replace = bool(notion_page_id_for_index and (force_replace or has_index_entry))
+                            # If force_replace=true, we attempt replacement even if the index is missing.
+                            should_replace = bool(force_replace or has_index_entry)
                             
                             if should_replace:
                                 print(f"   Replacing existing slide for Notion page '{notion_page_id_for_index}'...")
@@ -1158,6 +1197,13 @@ def handle_onboarding():
                                             writer.add_page(page)
 
                                 if not replaced:
+                                    # In edit mode, never append on failure to locate the old slide.
+                                    if force_replace:
+                                        raise Exception(
+                                            "Edit requested (force_replace=true) but could not locate existing slide to replace. "
+                                            "Refusing to append to avoid duplicating the deck. "
+                                            "Fix: ensure Slide Job Index has an entry for this Notion page (or send the prior Slide Job ID)."
+                                        )
                                     print("   Could not find old slide; appending new slide at end...")
                                     for p in old_reader.pages:
                                         writer.add_page(p)
@@ -1165,6 +1211,12 @@ def handle_onboarding():
                                         writer.add_page(p)
                             else:
                                 # No existing slides for this page, just append
+                                if force_replace:
+                                    raise Exception(
+                                        "Edit requested (force_replace=true) but no existing slide index entry was found. "
+                                        "Refusing to append to avoid duplicating the deck. "
+                                        "Fix: create the slide first (so an index entry exists) or provide the Slide Job ID."
+                                    )
                                 print("   Appending new slide(s) to existing PDF...")
                                 writer = PdfWriter()
                                 for p in old_reader.pages:

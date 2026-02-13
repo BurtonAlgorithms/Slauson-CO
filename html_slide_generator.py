@@ -1248,7 +1248,8 @@ class HTMLSlideGenerator:
     
     def _fallback_latlon(self, city: str):
         """
-        Fallback lat/lon for common cities and all US state capitals when geopy isn't available.
+        Known-good lat/lon for major US cities + all state capitals.
+        This is checked BEFORE geopy so we never get bad geocoder results for common cities.
         Uses real coordinates (no nudges) except for LA which is intentionally shifted.
         Note: AK/HI coordinates will clamp to contiguous US bounds unless handled specially.
         """
@@ -1267,9 +1268,38 @@ class HTMLSlideGenerator:
             
             # Major cities
             "seattle": (47.6062, -122.3321),
+            "portland": (45.5152, -122.6784),
             "boston": (42.3601, -71.0589),
             "chicago": (41.8781, -87.6298),
+            "houston": (29.7604, -95.3698),
+            "dallas": (32.7767, -96.7970),
+            "san antonio": (29.4241, -98.4936),
+            "san diego": (32.7157, -117.1611),
+            "san jose": (37.3382, -121.8863),
+            "detroit": (42.3314, -83.0458),
+            "minneapolis": (44.9778, -93.2650),
             "new orleans": (29.9511, -90.0715),
+            "charlotte": (35.2271, -80.8431),
+            "las vegas": (36.1699, -115.1398),
+            "philadelphia": (39.9526, -75.1652),
+            "washington": (38.9072, -77.0369),
+            "washington dc": (38.9072, -77.0369),
+            "dc": (38.9072, -77.0369),
+            "tampa": (27.9506, -82.4572),
+            "orlando": (28.5383, -81.3792),
+            "pittsburgh": (40.4406, -79.9959),
+            "cleveland": (41.4993, -81.6944),
+            "st louis": (38.6270, -90.1994),
+            "saint louis": (38.6270, -90.1994),
+            "kansas city": (39.0997, -94.5786),
+            "oakland": (37.8044, -122.2712),
+            "fort worth": (32.7555, -97.3308),
+            "memphis": (35.1495, -90.0490),
+            "baltimore": (39.2904, -76.6122),
+            "milwaukee": (43.0389, -87.9065),
+            "tucson": (32.2226, -110.9747),
+            "el paso": (31.7619, -106.4850),
+            "denver": (39.7392, -104.9903),
             
             # US State Capitals (standard coords)
             "montgomery": (32.3668, -86.3000),        # AL
@@ -1356,15 +1386,15 @@ class HTMLSlideGenerator:
         Uses known city positions to calibrate the projection.
         """
         # More accurate contiguous US bounds
-        lon_min, lon_max = -124.5, -67.0  # Adjusted for better accuracy
-        lat_min, lat_max = 25.0, 49.0
+        lon_min, lon_max = -125.0, -66.5  # Slightly wider to shift pins left
+        lat_min, lat_max = 24.5, 49.5
         
-        # Adjust padding to match the actual map borders in your template
-        # You may need to fine-tune these based on your specific template
-        PAD_L = 0.03  # Left padding
-        PAD_R = 0.05  # Right padding  
-        PAD_T = 0.08  # Top padding (increased to lower West Coast cities)
-        PAD_B = 0.08  # Bottom padding
+        # Padding to align the projection with the template's orange US outline.
+        # Tuned so Dallas lands in north-central TX and SF stays on the CA coast.
+        PAD_L = 0.02  # Left padding
+        PAD_R = 0.03  # Right padding (reduced so eastern cities like NY pin correctly)
+        PAD_T = 0.08  # Top padding
+        PAD_B = 0.01  # Bottom padding
         
         inner_x = map_x + int(map_w * PAD_L)
         inner_y = map_y + int(map_h * PAD_T)
@@ -1576,7 +1606,9 @@ class HTMLSlideGenerator:
         background_text = company_data.get('background', company_data.get('description', ''))
         # Extract city + state from address - handle formats like
         # "123 Innovation Drive, San Francisco, CA 94105" -> "San Francisco, CA"
-        full_address = company_data.get('address', company_data.get('location', 'Los Angeles'))
+        full_address = (company_data.get('address') or company_data.get('location') or '').strip()
+        if not full_address:
+            full_address = "San Francisco, CA"
         # Try to extract city + state (or fall back to whatever we were given)
         if ',' in full_address:
             parts = [p.strip() for p in full_address.split(',')]
@@ -1748,12 +1780,13 @@ class HTMLSlideGenerator:
             # map_area_x, map_area_y, map_width, map_height already set above
             
             # Get lat/lon for city
-            # Special case: Override Los Angeles to use adjusted coordinates (moved left)
+            # Check known-good dictionary FIRST (before geopy) so major cities always pin correctly.
+            # Geopy/Nominatim sometimes returns wrong locations (e.g., "Boston MA" → New York).
             location_lower = location.lower().strip()
             if "los angeles" in location_lower or location_lower == "la":
                 latlon = (34.0522, -118.5)  # Adjusted longitude to move pin left
             else:
-                latlon = self._geocode_city(location) or self._fallback_latlon(location)
+                latlon = self._fallback_latlon(location) or self._geocode_city(location)
                 if not latlon:
                     latlon = (39.5, -98.35)  # fallback center US
             
@@ -2028,13 +2061,13 @@ class HTMLSlideGenerator:
                 
                 print("   REMOVEBG_API_KEY not set, using manual background removal" if not use_api_removal else "   Using remove.bg API when available")
 
-                # Headshot target box (smaller to not cover map)
-                headshot_area_width = 500   # Reduced from 600 to avoid covering map
-                headshot_area_height = 500   # Keep square
+                # Headshot target box: wide, tall enough to reach near the slide bottom.
+                headshot_area_width = 600
+                headshot_area_height = 545
                 
-                # Position below the map, not overlapping
-                headshot_area_x = map_area_x + (map_width - headshot_area_width) // 2 - 50  # Centered under map, slightly left
-                headshot_area_y = map_area_y + map_height + 55  # Position below map with larger gap (lowered)
+                # Position: directly below the map (just under Texas), same X as before.
+                headshot_area_x = map_area_x + (map_width - headshot_area_width) // 2 - 30
+                headshot_area_y = map_area_y + map_height + 10
 
                 def load_process_headshot(path: str) -> Optional[Image.Image]:
                     try:
@@ -2748,10 +2781,11 @@ class HTMLSlideGenerator:
             # headshot_area_x = map_area_x + (map_width - headshot_area_width) // 2 - 50
             # headshot_area_y = map_area_y + map_height - 50
             # Headshot target box (smaller to not cover map)
-            headshot_area_width_px = 500
-            headshot_area_height_px = 500
-            headshot_area_x_px = map_area_x + (map_width - headshot_area_width_px) // 2 - 50  # Centered under map, slightly left
-            headshot_area_y_px = map_area_y + map_height + 55  # Position below map with larger gap (lowered)
+            # Keep PPTX placement consistent with the PDF layout (just under Texas)
+            headshot_area_width_px = 600
+            headshot_area_height_px = 545
+            headshot_area_x_px = map_area_x + (map_width - headshot_area_width_px) // 2 - 30
+            headshot_area_y_px = map_area_y + map_height + 10
             
             slide_pptx.shapes.add_picture(
                 headshot_bytes,
